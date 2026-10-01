@@ -18,8 +18,12 @@ Secrets (Streamlit Cloud: app Settings -> Secrets; locally:
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 
 from census_utils import (
+    INCOME_BUCKETS,
+    MEDIAN_INCOME_TOPCODE,
+    estimate_median_from_brackets,
     fetch_block_group_acs,
     fetch_naics_establishment_counts,
     fetch_naics_employment_size_class,
@@ -27,6 +31,7 @@ from census_utils import (
 from config import get_secret
 from geometry_utils import get_westfield_block_groups, get_westfield_boundary
 import places_utils
+import tracker_utils
 
 st.set_page_config(page_title="Westfield Giving & Business Dashboard", layout="wide")
 
@@ -58,29 +63,59 @@ except Exception as e:
     merged = None
 
 # ---- Tab 1: Income map ----
+MAP_METRICS = {
+    "Households earning $200k+": ("hh_200k_plus", ":,.0f"),
+    "Households earning $150k+": ("hh_150k_plus", ":,.0f"),
+    "Share of households earning $200k+ (%)": ("pct_hh_200k_plus", ":.0f"),
+    "Median household income": ("median_household_income", ":$,.0f"),
+}
+
 with tab_map:
-    st.subheader("Median Household Income by Block Group")
+    st.subheader("Giving Capacity by Block Group")
+    metric_label = st.radio(
+        "Color block groups by", list(MAP_METRICS), horizontal=True,
+        help="Counts of high-income households are the better major-gift signal: "
+             "ACS caps median income at $250,000, so in Westfield many block "
+             "groups hit the cap and look identical on a median map.",
+    )
+    metric_col, metric_fmt = MAP_METRICS[metric_label]
     if merged is not None:
         fig = px.choropleth_map(
             merged,
             geojson=merged.geometry.__geo_interface__,
             locations=merged.index,
-            color="median_household_income",
+            color=metric_col,
             hover_name="NAME",
             hover_data={
+                "hh_200k_plus": ":,.0f",
+                "pct_hh_200k_plus": ":.0f",
+                "households_total": ":,.0f",
                 "median_household_income": ":$,.0f",
                 "total_population": True,
-                "median_age": True,
             },
             map_style="carto-positron",
             center={"lat": 40.6589, "lon": -74.3479},  # Westfield, NJ
             zoom=12.5,
             opacity=0.65,
             color_continuous_scale="Greens",
-            labels={"median_household_income": "Median HH Income"},
+            labels={
+                metric_col: metric_label,
+                "hh_200k_plus": "Households $200k+",
+                "pct_hh_200k_plus": "% households $200k+",
+                "households_total": "Total households",
+                "median_household_income": "Median HH income",
+                "total_population": "Population",
+            },
         )
         fig.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0}, height=600)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
+
+        n_capped = int((merged["median_household_income"] >= MEDIAN_INCOME_TOPCODE).sum())
+        if metric_col == "median_household_income" and n_capped:
+            st.caption(
+                f"{n_capped} of {len(merged)} block groups are at the ACS cap "
+                "($250,000+), so their true medians are higher and indistinguishable here."
+            )
     else:
         st.info("Map unavailable — see warning above.")
 
@@ -99,23 +134,38 @@ with tab_demo:
         income_totals.columns = ["bracket", "households"]
         fig2 = px.bar(income_totals, x="bracket", y="households",
                        title="Household Income Distribution")
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")
 
     st.subheader("Demographic Summary")
     if merged is not None:
-        col1, col2, col3, col4, col5 = st.columns(5)
+        _, median_label = estimate_median_from_brackets(merged[list(INCOME_BUCKETS.values())].sum())
+        hh_total = merged["households_total"].sum()
+        hh_200k = merged["hh_200k_plus"].sum()
+
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Population", f"{merged['total_population'].sum():,.0f}")
-        col2.metric("Median Age (avg across BGs)", f"{merged['median_age'].mean():.1f}")
-        col3.metric("Median HH Income (avg across BGs)",
-                     f"${merged['median_household_income'].mean():,.0f}")
-        col4.metric("Median Home Value (avg across BGs)",
-                     f"${merged['median_home_value'].mean():,.0f}")
-        col5.metric("Avg Household Size", f"{merged['avg_household_size'].mean():.2f}")
+        col2.metric("Households", f"{hh_total:,.0f}")
+        col3.metric("Households earning $200k+", f"{hh_200k:,.0f}",
+                    help=f"{hh_200k / hh_total * 100:.0f}% of households" if hh_total else None)
+        col4.metric("Median HH Income (est.)", median_label,
+                    help="Interpolated from the combined income-bracket counts of all "
+                         "block groups shown. If it reads $200k+, the median is in the "
+                         "top bracket and ACS doesn't publish anything finer.")
+
+        col5, col6, col7 = st.columns(3)
+        col5.metric("Median Age (typical block group)", f"{merged['median_age'].median():.1f}",
+                    help="Median of block-group medians — a rough guide, not a town-wide median.")
+        col6.metric("Median Home Value (typical block group)",
+                    f"${merged['median_home_value'].median():,.0f}",
+                    help="Median of block-group medians. ACS caps home values at $2,000,000+.")
+        col7.metric("Avg Household Size",
+                    f"{merged['avg_household_size'].mean():.2f}",
+                    help="Simple average across block groups.")
 
         race_totals = merged[["white_alone", "black_alone", "asian_alone", "hispanic_latino"]].sum()
         fig3 = px.pie(values=race_totals.values, names=race_totals.index,
                        title="Race / Ethnicity Breakdown (not mutually exclusive categories)")
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, width="stretch")
 
     if merged is not None:
         st.subheader("Professional / Prospect-Research Indicators")
@@ -148,13 +198,13 @@ with tab_biz:
         "Use this to understand sector composition, not as a contact list."
     )
     naics_df = fetch_naics_establishment_counts()
-    st.dataframe(naics_df, use_container_width=True)
+    st.dataframe(naics_df, width="stretch")
 
     fig4 = px.bar(naics_df.dropna(subset=["establishments"]),
                    x="sector", y="establishments",
                    title=f"Establishments by Sector — ZIP {naics_df.attrs.get('zip', '07090')}")
     fig4.update_layout(xaxis_tickangle=-30)
-    st.plotly_chart(fig4, use_container_width=True)
+    st.plotly_chart(fig4, width="stretch")
 
     st.divider()
     st.subheader("Establishment Size by Sector (Union County-wide)")
@@ -165,7 +215,7 @@ with tab_biz:
         "solo operations or do they employ staff), not for precise local counts."
     )
     size_df = fetch_naics_employment_size_class()
-    st.dataframe(size_df, use_container_width=True)
+    st.dataframe(size_df, width="stretch")
 
     st.divider()
     st.subheader("Named Businesses (Google Places)")
@@ -233,6 +283,24 @@ with tab_biz:
     except Exception:
         biz_df["in_westfield_boundary"] = pd.NA
 
+    # Distance to the Rialto: walkable businesses get the strongest pitch
+    # (theater audiences become their customers).
+    rialto_lat, rialto_lon, rialto_source = places_utils.locate_rialto()
+    biz_df = places_utils.add_rialto_distance(biz_df, rialto_lat, rialto_lon)
+    if rialto_source.startswith("approximate"):
+        st.warning(f"Rialto location is {rialto_source}; distances are rough.")
+
+    # Contact tracker
+    store, store_error = tracker_utils.get_store()
+    if store_error:
+        st.error(store_error + " Falling back to a session-only tracker.")
+    try:
+        tracker = tracker_utils.load_tracker(store)
+    except Exception as e:
+        st.error(f"Couldn't read the contact tracker: {e}")
+        tracker = tracker_utils.SessionStore().load()
+    biz_df = tracker_utils.attach_tracker(biz_df, tracker)
+
     st.warning(
         "**Chain / independent labels are a heuristic, not a fact.** "
         "\"Known chain\" = name matches `known_chains.txt` (many franchises are still "
@@ -242,58 +310,129 @@ with tab_biz:
         "generic names. Check the note column before relying on a label."
     )
 
-    f1, f2, f3 = st.columns([2, 2, 1])
+    f1, f2, f3 = st.columns([2, 2, 2])
     sector_options = sorted(biz_df["sector"].unique())
     sectors_selected = f1.multiselect("Filter by sector", sector_options, default=sector_options)
     status_options = [s for s in places_utils.FRANCHISE_LABELS
                       if s in set(biz_df["franchise_status"])]
     statuses_selected = f2.multiselect("Filter by chain / independent", status_options,
                                        default=status_options)
+    contact_selected = f3.multiselect(
+        "Filter by contact status", tracker_utils.STATUSES, default=tracker_utils.OPEN_STATUSES,
+        help="Donors, declines and do-not-contacts are hidden by default.",
+    )
+    g1, g2 = st.columns(2)
     boundary_known = biz_df["in_westfield_boundary"].notna().all()
-    only_in_town = f3.checkbox("Inside Westfield town line only", value=False,
+    only_in_town = g1.checkbox("Inside Westfield town line only", value=False,
                                disabled=not boundary_known,
                                help=None if boundary_known else
                                "Town boundary unavailable (needs census.gov access).")
+    only_walkable = g2.checkbox(
+        f"Within walking distance of the Rialto (~{places_utils.WALKING_DISTANCE_M} m)",
+        value=False,
+        help="Straight-line distance, so actual walks are a bit longer.",
+    )
 
     filtered = biz_df[
         biz_df["sector"].isin(sectors_selected)
         & biz_df["franchise_status"].isin(statuses_selected)
+        & biz_df["status"].isin(contact_selected)
     ]
     if only_in_town:
         filtered = filtered[filtered["in_westfield_boundary"] == True]  # noqa: E712
+    if only_walkable:
+        filtered = filtered[filtered["walk_to_rialto"]]
+    filtered = filtered.sort_values("meters_to_rialto").reset_index(drop=True)
 
-    m1, m2, m3 = st.columns(3)
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("Businesses shown", len(filtered))
     m2.metric("Likely independent",
               int((filtered["franchise_status"] == places_utils.LABEL_INDEPENDENT).sum()))
-    m3.metric("Chains (known + likely)",
-              int(filtered["franchise_status"].isin(
-                  [places_utils.LABEL_KNOWN, places_utils.LABEL_MULTI]).sum()))
+    m3.metric("Walkable to the Rialto", int(filtered["walk_to_rialto"].sum()))
+    m4.metric("Hidden by contact status",
+              int((~biz_df["status"].isin(contact_selected)).sum()))
 
     if not filtered.empty:
         fig5 = px.scatter_map(
             filtered, lat="lat", lon="lon", hover_name="name",
             hover_data={"address": True, "sector": True, "franchise_status": True,
+                        "status": True, "meters_to_rialto": True,
                         "lat": False, "lon": False},
             color="franchise_status",
             category_orders={"franchise_status": places_utils.FRANCHISE_LABELS},
-            zoom=13, center={"lat": 40.6589, "lon": -74.3479},
+            zoom=13.5, center={"lat": rialto_lat, "lon": rialto_lon},
             map_style="carto-positron", height=550,
         )
+        fig5.add_trace(go.Scattermap(
+            lat=[rialto_lat], lon=[rialto_lon], mode="markers+text",
+            marker={"size": 16, "color": "black"}, text=["Rialto"],
+            textposition="top right", name="Rialto", hoverinfo="name",
+        ))
         fig5.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
-        st.plotly_chart(fig5, use_container_width=True)
+        st.plotly_chart(fig5, width="stretch")
+
+    st.markdown(
+        f"**Contact tracker** — saved to: *{store.description}*. "
+        "Edit **status** and **notes** in the table, then click **Save changes**. "
+        "Save before changing filters, or unsaved edits are lost."
+    )
+    table_cols = [
+        "name", "status", "notes", "address", "meters_to_rialto", "sector",
+        "franchise_status", "classification_note", "in_westfield_boundary",
+        "updated_at", "place_id",
+    ]
+    view = filtered[table_cols]
+    edited = st.data_editor(
+        view,
+        column_config={
+            "status": st.column_config.SelectboxColumn(
+                "status", options=tracker_utils.STATUSES, required=True),
+            "notes": st.column_config.TextColumn("notes", width="medium"),
+            "meters_to_rialto": st.column_config.NumberColumn("m to Rialto", format="%d"),
+        },
+        disabled=[c for c in table_cols if c not in ("status", "notes")],
+        hide_index=True,
+        width="stretch",
+        # A new key whenever the visible rows change, so pending edits
+        # can't land on the wrong business after a filter change.
+        key="tracker_editor_" + str(hash(tuple(view["place_id"]))),
+    )
+    changes = tracker_utils.changed_rows(view, edited)
+    if st.button(f"Save changes ({len(changes)})", disabled=changes.empty, type="primary"):
+        try:
+            store.upsert(changes)
+            tracker_utils.load_tracker.clear()
+            st.success(f"Saved {len(changes)} change(s).")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Save failed — nothing was written: {e}")
+
+    if not store.persistent:
+        with st.expander("Tracker not shared — load or save it as a CSV"):
+            st.caption(
+                "Without the Google Sheet configured (see README), the tracker lives "
+                "only in this browser session. Download it before closing, and upload "
+                "it next time."
+            )
+            st.download_button(
+                "Download tracker (CSV)", data=tracker_utils.SessionStore().load().to_csv(index=False),
+                file_name="rialto_contact_tracker.csv", mime="text/csv",
+            )
+            uploaded = st.file_uploader("Upload a tracker CSV", type="csv")
+            if uploaded is not None and st.button("Load uploaded tracker"):
+                store.upsert(pd.read_csv(uploaded, dtype=str))
+                st.rerun()
 
     export_cols = [
         "name", "address", "lat", "lon", "sector", "naics_code", "franchise_status",
-        "classification_note", "place_id", "sector_basis", "google_primary_type",
-        "in_westfield_boundary", "distance_km", "nj_same_name_locations",
-        "nj_same_name_towns", "chain_match", "search_category",
+        "classification_note", "status", "notes", "meters_to_rialto", "walk_to_rialto",
+        "place_id", "sector_basis", "google_primary_type", "in_westfield_boundary",
+        "distance_km", "nj_same_name_locations", "nj_same_name_towns", "chain_match",
+        "search_category",
     ]
-    export_df = filtered[export_cols]
     st.download_button(
         "Download filtered list (CSV)",
-        data=export_df.to_csv(index=False),
+        data=filtered[export_cols].to_csv(index=False),
         file_name="westfield_business_prospects_filtered.csv",
         mime="text/csv",
     )
-    st.dataframe(export_df, use_container_width=True, hide_index=True)

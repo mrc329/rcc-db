@@ -75,6 +75,7 @@ ACS_VARS = {
 }
 
 # Household income distribution (B19001) bucket labels
+HOUSEHOLDS_TOTAL_VAR = "B19001_001E"
 INCOME_BUCKETS = {
     "B19001_002E": "< $10k",
     "B19001_003E": "$10k-15k",
@@ -93,6 +94,16 @@ INCOME_BUCKETS = {
     "B19001_016E": "$150k-200k",
     "B19001_017E": "$200k+",
 }
+
+# Lower bound (in dollars) of each INCOME_BUCKETS bracket, same order.
+INCOME_BUCKET_FLOORS = [
+    0, 10_000, 15_000, 20_000, 25_000, 30_000, 35_000, 40_000, 45_000,
+    50_000, 60_000, 75_000, 100_000, 125_000, 150_000, 200_000,
+]
+
+# ACS medians are top-coded: a median income of 250,001 means "$250,000
+# or more". Values at or above these are flagged, not taken literally.
+MEDIAN_INCOME_TOPCODE = 250_001
 
 # 2-digit NAICS sectors relevant to small-business sponsorship targeting
 NAICS_SECTORS = {
@@ -132,7 +143,7 @@ def fetch_block_group_acs():
     Returns a DataFrame keyed by GEOID (state+county+tract+block group),
     with the ACS vintage used in df.attrs["acs_year"].
     """
-    varlist = ",".join(["NAME"] + list(ACS_VARS.keys()) + list(INCOME_BUCKETS.keys()))
+    varlist = ",".join(["NAME", HOUSEHOLDS_TOTAL_VAR] + list(ACS_VARS.keys()) + list(INCOME_BUCKETS.keys()))
     params = {
         "get": varlist,
         "for": "block group:*",
@@ -152,17 +163,58 @@ def fetch_block_group_acs():
     df = pd.DataFrame(data[1:], columns=data[0])
     df.attrs["acs_year"] = year
 
-    numeric_cols = list(ACS_VARS.keys()) + list(INCOME_BUCKETS.keys())
+    numeric_cols = [HOUSEHOLDS_TOTAL_VAR] + list(ACS_VARS.keys()) + list(INCOME_BUCKETS.keys())
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+        # ACS annotation codes (-666666666 "not computable", -999999999,
+        # -888888888, -222222222 ...) are large negatives; they'd wreck
+        # any sum or average, so treat them as missing.
+        df.loc[df[col] < -100_000_000, col] = pd.NA
 
-    df = df.rename(columns=ACS_VARS)
+    df = df.rename(columns={HOUSEHOLDS_TOTAL_VAR: "households_total", **ACS_VARS})
     df = df.rename(columns=INCOME_BUCKETS)
+
+    # High-capacity household counts — for major-gift prospecting these
+    # say more than a median, which is top-coded at $250k anyway.
+    df["hh_200k_plus"] = df["$200k+"]
+    df["hh_150k_plus"] = df["$150k-200k"] + df["$200k+"]
+    df["pct_hh_200k_plus"] = (df["hh_200k_plus"] / df["households_total"] * 100).where(
+        df["households_total"] > 0
+    )
 
     df["GEOID"] = (
         df["state"] + df["county"] + df["tract"] + df["block group"]
     )
     return df
+
+
+def estimate_median_from_brackets(bracket_counts):
+    """
+    Estimate a median household income from summed B19001 bracket counts
+    (a Series indexed by INCOME_BUCKETS labels), by linear interpolation
+    within the bracket holding the middle household.
+
+    This is the right way to get an area-wide median from several block
+    groups; averaging block-group medians is not. Returns (value, label):
+    if the median lands in the open-ended $200k+ bracket, value is 200000
+    and label is "$200k+".
+    """
+    counts = [float(bracket_counts.get(label, 0) or 0) for label in INCOME_BUCKETS.values()]
+    total = sum(counts)
+    if total <= 0:
+        return None, "n/a"
+    half = total / 2
+    running = 0.0
+    floors = INCOME_BUCKET_FLOORS
+    for i, count in enumerate(counts):
+        if running + count >= half and count > 0:
+            if i == len(counts) - 1:
+                return floors[i], "$200k+"
+            width = floors[i + 1] - floors[i]
+            value = floors[i] + (half - running) / count * width
+            return value, f"${value:,.0f}"
+        running += count
+    return None, "n/a"
 
 
 def _cbp_query(get_vars, geo_params, naics_code):

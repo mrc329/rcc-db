@@ -3,14 +3,20 @@
 Streamlit dashboard for Rialto Center for Creativity capital campaign
 prospect research:
 
-- **Income Map / Demographics** — Census ACS 5-year estimates by block
-  group for Westfield (state 34, county 039, place 79040), mapped against
-  TIGER boundaries.
+- **Giving Capacity Map / Demographics** — Census ACS 5-year estimates by
+  block group for Westfield (state 34, county 039, place 79040), mapped
+  against TIGER boundaries. Defaults to the count of households earning
+  $200k+ (ACS top-codes median income at $250k, so a median map flattens
+  out in Westfield). The town-wide median is interpolated from combined
+  income brackets rather than averaged across block-group medians.
 - **Small Business Targeting** — Census County Business Patterns sector
   counts, plus a named business list from the Google Places API, mapped
   to NAICS sectors and labeled *known chain* / *likely chain — multiple
-  locations* / *likely independent*. Filter by sector and chain status;
-  export the filtered list as CSV.
+  locations* / *likely independent*. Sorted by straight-line distance to
+  the Rialto, with a walking-distance filter. A **contact tracker** marks
+  each business not contacted / asked / donor / declined / do not
+  contact, with notes; handled businesses drop off the list by default.
+  Export the filtered list as CSV.
 
 ## Chain / independent labels are a heuristic
 
@@ -34,6 +40,31 @@ secrets (falling back to environment variables). See
 [`.streamlit/secrets.toml.example`](.streamlit/secrets.toml.example) for
 where to get each key. For local runs, copy it to `.streamlit/secrets.toml`
 (git-ignored) and fill in real values.
+
+## Contact tracker setup (Google Sheet)
+
+Streamlit Cloud has no permanent disk, so the tracker is stored in a
+Google Sheet. Without this setup it still works, but only for the current
+browser session (with a CSV save/load fallback).
+
+1. In Google Cloud Console (the same project as the Places key is fine):
+   **APIs & Services → Library** → enable **Google Sheets API**.
+2. **IAM & Admin → Service Accounts → Create service account** (name it
+   e.g. `rcc-tracker`; no roles needed). Open it → **Keys → Add key →
+   JSON**. A key file downloads.
+3. Create a Google Sheet, click **Share**, and add the service account's
+   `client_email` (from the JSON) as an **Editor**.
+4. In the app's secrets, add `TRACKER_SHEET_URL` (the Sheet's URL) and a
+   `[gcp_service_account]` section with the fields from the JSON file —
+   the template in `.streamlit/secrets.toml.example` shows the layout.
+
+The app creates a `tracker` tab in the Sheet, keyed by Google Place ID.
+Volunteers can edit the Sheet directly, too. If two people save the
+*same* business at nearly the same moment, the later save wins.
+
+Anyone who can open the app can edit the tracker, so if notes will hold
+anything sensitive (gift amounts, personal details), set the app to
+private in Streamlit Cloud's sharing settings.
 
 ## Run locally
 
@@ -65,5 +96,7 @@ The tests replace census.gov, TIGER and Google Places with offline fakes
      CENSUS_API_KEY = "your-census-key"
      GOOGLE_PLACES_API_KEY = "your-google-places-key"
      ```
+     plus, optionally, the tracker's `TRACKER_SHEET_URL` and
+     `[gcp_service_account]` section (see above).
 5. **Deploy**. Later changes to secrets: app's **⋮ menu → Settings →
    Secrets**; the app restarts with the new values.

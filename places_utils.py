@@ -39,6 +39,12 @@ TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 WESTFIELD_CENTER = (40.6589, -74.3479)  # downtown Westfield, NJ
 SEARCH_RADIUS_KM = 3.0
 
+# The venue. Geocoded through Places at runtime; the fallback point is
+# approximate (downtown on E. Broad St) and only used if that fails.
+RIALTO_QUERY = "Rialto Theatre, 250 E Broad St, Westfield, NJ 07090"
+RIALTO_FALLBACK = (40.6505, -74.3450)
+WALKING_DISTANCE_M = 800  # ~10 minute walk, straight-line
+
 # Rough New Jersey bounding box for the multi-location chain check.
 # Slightly over-covers into NY/PA/DE, which is fine for spotting chains.
 NJ_RECTANGLE = {
@@ -248,6 +254,37 @@ def haversine_km(lat1, lon1, lat2, lon2):
     dp, dl = p2 - p1, math.radians(lon2 - lon1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def locate_rialto():
+    """
+    Return (lat, lon, source) for the Rialto. source is the address
+    Google matched, or "approximate (lookup failed: ...)" for the fallback.
+    """
+    try:
+        places = text_search(
+            RIALTO_QUERY, _bounding_rectangle(WESTFIELD_CENTER, SEARCH_RADIUS_KM),
+            "places.location,places.formattedAddress,places.displayName",
+        )
+    except Exception as e:
+        return (*RIALTO_FALLBACK, f"approximate (lookup failed: {e})")
+    for p in places:
+        loc = p.get("location") or {}
+        if "Broad" in p.get("formattedAddress", "") and "latitude" in loc:
+            return loc["latitude"], loc["longitude"], p["formattedAddress"]
+    return (*RIALTO_FALLBACK, "approximate (address not found in Places)")
+
+
+def add_rialto_distance(df, rialto_lat, rialto_lon):
+    """Add straight-line distance to the Rialto and a walking-distance flag."""
+    out = df.copy()
+    out["meters_to_rialto"] = [
+        round(haversine_km(rialto_lat, rialto_lon, lat, lon) * 1000)
+        for lat, lon in zip(out["lat"], out["lon"])
+    ]
+    out["walk_to_rialto"] = out["meters_to_rialto"] <= WALKING_DISTANCE_M
+    return out
 
 
 def _bounding_rectangle(center, radius_km):

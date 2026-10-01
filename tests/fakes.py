@@ -166,6 +166,11 @@ LOCAL_PLACES = {
     ],
 }
 
+LOCAL_PLACES["Rialto Theatre, 250 E Broad St, Westfield, NJ 07090"] = [
+    _place("p_rialto", "Rialto Theatre", 40.6503, -74.3447, "250 E Broad St, Westfield, NJ 07090, USA",
+           "performing_arts_theater", ["performing_arts_theater"]),
+]
+
 # Same-name hits across NJ for the multi-location check.
 NJ_SAME_NAME = {
     "Tri-County Savings": ["Westfield", "Cranford", "Summit", "Clark"],  # regional mini-chain
