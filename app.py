@@ -30,6 +30,7 @@ from census_utils import (
 )
 from config import get_secret
 from geometry_utils import get_westfield_block_groups, get_westfield_boundary
+import campaign_utils
 import irs_utils
 import places_utils
 import tracker_utils
@@ -44,8 +45,9 @@ st.caption(
     "and small-business sponsor targeting."
 )
 
-tab_map, tab_demo, tab_irs, tab_biz = st.tabs(
-    ["Giving Capacity Map", "Demographics", "Charitable Giving by ZIP", "Small Business Targeting"]
+tab_plan, tab_map, tab_demo, tab_irs, tab_biz = st.tabs(
+    ["Campaign Plan", "Giving Capacity Map", "Demographics", "Charitable Giving by ZIP",
+     "Small Business Targeting"]
 )
 
 # ---- Load data (cached) ----
@@ -66,6 +68,125 @@ except Exception as e:
         "access to census.gov TIGER files — confirm this works once deployed."
     )
     merged = None
+
+# ---- Tab: Campaign plan ----
+with tab_plan:
+    st.subheader(f"${campaign_utils.CAMPAIGN_GOAL / 1e6:,.0f}M Campaign: Milestones & Pace")
+    st.caption(
+        "Milestones from the campaign plan. Milestone Two is read as \\$3.5M cash plus "
+        "\\$1M in pledges (\\$4.5M committed). Enter totals to date below — they're kept "
+        "for this browser session only."
+    )
+    r1, r2 = st.columns(2)
+    raised_committed = r1.number_input(
+        "Raised to date — cash + pledges ($)", min_value=0, step=50_000, value=0,
+        key="raised_committed")
+    raised_cash = r2.number_input(
+        "Of which cash in hand ($)", min_value=0, step=50_000, value=0, key="raised_cash",
+        help="Milestones One and Two have cash targets.")
+    if raised_cash > raised_committed:
+        st.warning("Cash in hand is more than the total raised — the total should include cash.")
+
+    pace = campaign_utils.milestone_pace(raised_committed, raised_cash)
+    fig_pace = go.Figure()
+    fig_pace.add_trace(go.Scatter(
+        x=list(pace["due"]),
+        y=list(pace["target_committed"]),
+        mode="lines+markers+text", name="Milestone (committed)",
+        text=[f"{m}: ${t / 1e6:,.1f}M" for m, t in zip(pace["milestone"], pace["target_committed"])],
+        textposition="top left", line={"color": "#1b7f3b"},
+    ))
+    fig_pace.add_trace(go.Scatter(
+        x=[pd.Timestamp.today().normalize()], y=[raised_committed], mode="markers",
+        marker={"size": 14, "color": "black", "symbol": "diamond"}, name="Raised to date",
+    ))
+    fig_pace.update_layout(height=380, margin={"t": 20, "b": 20, "l": 0, "r": 0},
+                           yaxis_title="Committed ($)", yaxis_tickformat="$,.0s",
+                           legend={"orientation": "h", "y": -0.15})
+    st.plotly_chart(fig_pace, width="stretch")
+
+    st.dataframe(
+        pace[["milestone", "due", "target_committed", "target_cash", "gap_committed",
+              "gap_cash", "months_left", "monthly_pace_needed", "status", "note"]],
+        hide_index=True, width="stretch",
+        column_config={
+            "target_committed": st.column_config.NumberColumn("Target (committed)", format="dollar"),
+            "target_cash": st.column_config.NumberColumn("Cash target", format="dollar"),
+            "gap_committed": st.column_config.NumberColumn("Still needed", format="dollar"),
+            "gap_cash": st.column_config.NumberColumn("Cash still needed", format="dollar"),
+            "monthly_pace_needed": st.column_config.NumberColumn("Needed per month", format="dollar"),
+            "months_left": st.column_config.NumberColumn("Months left", format="%.1f"),
+        },
+    )
+
+    st.subheader("Gift Range Chart")
+    st.caption(
+        "The standard fundraising rule of thumb, not a forecast: a lead gift of 10–20% of the "
+        "goal, each lower level raising about as much as the lead gift, and 3–4 qualified "
+        "prospects per gift (more for the biggest asks). Edit gift counts or ratios to "
+        "match your development plan."
+    )
+    g1, g2, g3 = st.columns(3)
+    lead_pct = g1.slider("Lead gift (% of goal)", 10, 25, 15)
+    prospects_top = g2.number_input("Prospects per gift, $250k+", 2, 8, 4)
+    prospects_rest = g3.number_input("Prospects per gift, under $250k", 2, 8, 3)
+    chart = campaign_utils.gift_range_chart(
+        lead_pct=lead_pct, prospects_top=prospects_top, prospects_rest=prospects_rest)
+    edited_chart = st.data_editor(
+        chart[["gift_amount", "gifts", "prospects_per_gift"]],
+        num_rows="dynamic", hide_index=True, width="stretch",
+        key=f"gift_chart_{lead_pct}_{prospects_top}_{prospects_rest}",
+        column_config={
+            "gift_amount": st.column_config.NumberColumn("Gift amount", format="dollar", min_value=1),
+            "gifts": st.column_config.NumberColumn("Gifts needed", min_value=1),
+            "prospects_per_gift": st.column_config.NumberColumn("Prospects per gift", min_value=1),
+        },
+    )
+    chart = campaign_utils.recompute_chart(edited_chart, prospects_top=prospects_top,
+                                           prospects_rest=prospects_rest)
+    total = chart["level_total"].sum()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Chart total", f"${total / 1e6:,.2f}M",
+              help="Edits that leave this below the goal show what's missing.")
+    c2.metric("Gifts needed", f"{chart['gifts'].sum():,}")
+    c3.metric("Qualified prospects needed", f"{chart['prospects_needed'].sum():,}")
+    if total < campaign_utils.CAMPAIGN_GOAL:
+        st.warning(f"This chart falls ${(campaign_utils.CAMPAIGN_GOAL - total):,.0f} short of the goal.")
+    st.dataframe(
+        chart, hide_index=True, width="stretch",
+        column_config={
+            "gift_amount": st.column_config.NumberColumn("Gift amount", format="dollar"),
+            "gifts": "Gifts",
+            "level_total": st.column_config.NumberColumn("Level total", format="dollar"),
+            "cumulative_total": st.column_config.NumberColumn("Cumulative", format="dollar"),
+            "pct_of_goal": st.column_config.NumberColumn("% of goal", format="%.0f%%"),
+            "prospects_per_gift": "Prospects / gift",
+            "prospects_needed": "Prospects needed",
+        },
+    )
+
+    st.subheader("Does Westfield Have the Prospect Pool?")
+    if merged is not None:
+        big = chart[chart["gift_amount"] >= 100_000]
+        hh200 = merged["hh_200k_plus"].sum(min_count=1)
+        homes1m = merged["homes_1m_plus"].sum(min_count=1)
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Prospects needed for $100k+ gifts", f"{big['prospects_needed'].sum():,}",
+                  help=f"{big['gifts'].sum():,} gifts of $100k or more in the chart above.")
+        p2.metric("Westfield-area households earning $200k+",
+                  "n/a" if pd.isna(hh200) else f"{hh200:,.0f}")
+        p3.metric("Owner-occupied homes worth $1M+",
+                  "n/a" if pd.isna(homes1m) else f"{homes1m:,.0f}")
+        st.caption(
+            "Context, not a conversion: a \\$200k income doesn't mean \\$100k of giving "
+            "capacity, and these are block groups touching Westfield, so some households "
+            "are in neighboring towns. Six-figure gifts usually come from wealth (home "
+            "equity, investments, a business) plus a personal connection to the project — "
+            "the households above are the pool to *qualify* prospects from, and the top "
+            "of the chart will likely need donors from beyond Westfield too."
+        )
+    else:
+        st.info("Census data unavailable — see the warning above.")
 
 # ---- Tab 1: Income map ----
 MAP_METRICS = {

@@ -184,3 +184,24 @@ def test_irs_tab(fake_census, monkeypatch):
     at.run()
     assert "Avg. deduction per claiming return" in [m.label for m in at.metric]
     irs_utils.fetch_nj_zip_giving.clear()
+
+
+def test_campaign_plan_tab(fake_census, monkeypatch):
+    monkeypatch.delenv("GOOGLE_PLACES_API_KEY", raising=False)
+    at = _run()
+    assert not at.exception
+    by_label = {m.label: m.value for m in at.metric}
+    assert by_label["Chart total"] == "$10.00M"
+    assert by_label["Gifts needed"] == "77"
+    assert by_label["Qualified prospects needed"] == "243"
+    assert "Westfield-area households earning $200k+" in by_label
+
+    next(n for n in at.number_input if n.label.startswith("Raised to date")).set_value(1_000_000)
+    next(n for n in at.number_input if n.label.startswith("Of which cash")).set_value(800_000)
+    at.run()
+    pace = next(d.value for d in at.dataframe if "monthly_pace_needed" in d.value.columns)
+    assert pace.loc[pace["milestone"] == "One", "gap_committed"].iloc[0] == 2_000_000
+
+    next(s for s in at.slider if s.label.startswith("Lead gift")).set_value(20)
+    at.run()
+    assert {m.label: m.value for m in at.metric}["Gifts needed"] == "35"
