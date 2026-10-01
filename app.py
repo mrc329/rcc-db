@@ -30,6 +30,7 @@ from census_utils import (
 )
 from config import get_secret
 from geometry_utils import get_westfield_block_groups, get_westfield_boundary
+import irs_utils
 import places_utils
 import tracker_utils
 
@@ -41,7 +42,9 @@ st.caption(
     "targeting by NAICS sector — built for Rialto capital campaign prospect research."
 )
 
-tab_map, tab_demo, tab_biz = st.tabs(["Income Map", "Demographics", "Small Business Targeting"])
+tab_map, tab_demo, tab_irs, tab_biz = st.tabs(
+    ["Giving Capacity Map", "Demographics", "Charitable Giving by ZIP", "Small Business Targeting"]
+)
 
 # ---- Load data (cached) ----
 with st.spinner("Loading Census data..."):
@@ -67,6 +70,7 @@ MAP_METRICS = {
     "Households earning $200k+": ("hh_200k_plus", ":,.0f"),
     "Households earning $150k+": ("hh_150k_plus", ":,.0f"),
     "Share of households earning $200k+ (%)": ("pct_hh_200k_plus", ":.0f"),
+    "Owner-occupied homes worth $1M+": ("homes_1m_plus", ":,.0f"),
     "Median household income": ("median_household_income", ":$,.0f"),
 }
 
@@ -89,6 +93,7 @@ with tab_map:
             hover_data={
                 "hh_200k_plus": ":,.0f",
                 "pct_hh_200k_plus": ":.0f",
+                "homes_1m_plus": ":,.0f",
                 "households_total": ":,.0f",
                 "median_household_income": ":$,.0f",
                 "total_population": True,
@@ -102,6 +107,7 @@ with tab_map:
                 metric_col: metric_label,
                 "hh_200k_plus": "Households $200k+",
                 "pct_hh_200k_plus": "% households $200k+",
+                "homes_1m_plus": "Homes $1M+",
                 "households_total": "Total households",
                 "median_household_income": "Median HH income",
                 "total_population": "Population",
@@ -118,6 +124,56 @@ with tab_map:
             )
     else:
         st.info("Map unavailable — see warning above.")
+
+    if merged is not None:
+        st.subheader("Block Groups Ranked for Outreach")
+        st.caption(
+            "Where to canvass or mail first. Counts are ACS estimates with real margins "
+            "of error at this scale — treat close ranks as ties. \"% in Westfield\" is the "
+            "share of the block group's land inside the town line; low values mean most "
+            "of its households are in a neighboring town."
+        )
+        rank_options = {
+            "Households earning $200k+": "hh_200k_plus",
+            "Homes worth $1M+": "homes_1m_plus",
+            "Share of households earning $200k+": "pct_hh_200k_plus",
+        }
+        rank_by = st.selectbox("Rank by", list(rank_options))
+        ranked = (
+            merged.drop(columns="geometry")
+            .sort_values(rank_options[rank_by], ascending=False, na_position="last")
+            .reset_index(drop=True)
+        )
+        ranked.insert(0, "rank", range(1, len(ranked) + 1))
+        ranked["median_income_display"] = [
+            "n/a" if pd.isna(v) else ("$250k+ (capped)" if v >= MEDIAN_INCOME_TOPCODE else f"${v:,.0f}")
+            for v in ranked["median_household_income"]
+        ]
+        rank_cols = {
+            "rank": "Rank",
+            "NAME": "Block group",
+            "pct_area_in_westfield": "% in Westfield",
+            "households_total": "Households",
+            "hh_200k_plus": "HH $200k+",
+            "pct_hh_200k_plus": "% HH $200k+",
+            "homes_1m_plus": "Homes $1M+",
+            "pct_homes_1m_plus": "% owner homes $1M+",
+            "median_income_display": "Median HH income",
+            "GEOID": "GEOID",
+        }
+        ranked_view = ranked[[c for c in rank_cols if c in ranked.columns]].rename(columns=rank_cols)
+        st.dataframe(
+            ranked_view, hide_index=True, width="stretch",
+            column_config={
+                "% HH $200k+": st.column_config.NumberColumn(format="%.0f%%"),
+                "% owner homes $1M+": st.column_config.NumberColumn(format="%.0f%%"),
+                "% in Westfield": st.column_config.NumberColumn(format="%.0f%%"),
+            },
+        )
+        st.download_button(
+            "Download ranked block groups (CSV)", data=ranked_view.to_csv(index=False),
+            file_name="westfield_block_groups_ranked.csv", mime="text/csv",
+        )
 
     st.caption(
         "Block groups shown are those intersecting Westfield's town boundary; "
@@ -205,6 +261,96 @@ with tab_demo:
 
     with st.expander("Raw block group data"):
         st.dataframe(acs_df)
+
+# ---- Tab: Charitable giving by ZIP (IRS) ----
+with tab_irs:
+    st.subheader("Charitable Deductions Claimed, by ZIP Code")
+    st.warning(
+        "**Read these as a floor, not a measure of total giving.** IRS figures only "
+        "include returns that itemized deductions — since the 2018 tax law change most "
+        "filers don't, so this undercounts giving and skews toward higher-income "
+        "households. ZIP 07090 isn't exactly the town line, and the data runs a few "
+        "years behind."
+    )
+    if st.button("Load IRS ZIP data",
+                 help="Downloads a national IRS file once (tens of MB) and keeps "
+                      "New Jersey; cached afterward.") or st.session_state.get("irs_loaded"):
+        st.session_state["irs_loaded"] = True
+        try:
+            with st.spinner("Downloading IRS ZIP-code data (one-time)..."):
+                irs_df = irs_utils.fetch_nj_zip_giving()
+        except Exception as e:
+            st.error(f"Couldn't load IRS data: {e}")
+            irs_df = None
+
+        if irs_df is not None:
+            all_zips = sorted(irs_df["zip"])
+            default_zips = [z for z in irs_utils.COMPARISON_ZIPS if z in set(all_zips)]
+            chosen = st.multiselect(
+                "ZIP codes to compare", all_zips, default=default_zips,
+                format_func=lambda z: f"{z} {irs_utils.COMPARISON_ZIPS.get(z, '')}".strip(),
+            )
+            cmp = irs_df[irs_df["zip"].isin(chosen)].copy()
+            cmp["label"] = (cmp["zip"] + " " + cmp["town"]).str.strip()
+            cmp["is_home"] = cmp["zip"] == irs_utils.HOME_ZIP
+
+            home = irs_df[irs_df["zip"] == irs_utils.HOME_ZIP]
+            if not home.empty:
+                h = home.iloc[0]
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Westfield (07090): returns claiming charity",
+                          f"{h['pct_returns_claiming_charity']:.0f}%",
+                          help=f"{h['returns_claiming_charity']:,.0f} of {h['returns']:,.0f} returns")
+                k2.metric("Avg. deduction per claiming return",
+                          f"${h['avg_gift_per_claiming_return']:,.0f}")
+                k3.metric("Total charitable deductions claimed",
+                          f"${h['charity_total'] / 1e6:,.1f}M")
+
+            if not cmp.empty:
+                metric_choice = st.radio(
+                    "Compare", ["Avg. deduction per claiming return",
+                                "% of returns claiming charity",
+                                "Charity as % of AGI (all returns)"],
+                    horizontal=True,
+                )
+                col = {"Avg. deduction per claiming return": "avg_gift_per_claiming_return",
+                       "% of returns claiming charity": "pct_returns_claiming_charity",
+                       "Charity as % of AGI (all returns)": "charity_pct_of_agi"}[metric_choice]
+                fig_irs = px.bar(
+                    cmp.sort_values(col, ascending=False), x="label", y=col, color="is_home",
+                    color_discrete_map={True: "#1b7f3b", False: "#9bb5a2"},
+                    labels={"label": "", col: metric_choice, "is_home": "Westfield"},
+                )
+                fig_irs.update_layout(showlegend=False, xaxis_tickangle=-30)
+                st.plotly_chart(fig_irs, width="stretch")
+
+                table = cmp.sort_values(col, ascending=False)[[
+                    "zip", "town", "returns", "returns_claiming_charity",
+                    "pct_returns_claiming_charity", "avg_gift_per_claiming_return",
+                    "charity_total", "avg_agi_per_return", "charity_pct_of_agi",
+                ]]
+                st.dataframe(
+                    table, hide_index=True, width="stretch",
+                    column_config={
+                        "pct_returns_claiming_charity": st.column_config.NumberColumn(
+                            "% claiming", format="%.0f%%"),
+                        "avg_gift_per_claiming_return": st.column_config.NumberColumn(
+                            "Avg. deduction", format="dollar"),
+                        "charity_total": st.column_config.NumberColumn(
+                            "Total deductions", format="dollar"),
+                        "avg_agi_per_return": st.column_config.NumberColumn(
+                            "Avg. AGI / return", format="dollar"),
+                        "charity_pct_of_agi": st.column_config.NumberColumn(
+                            "Charity % of AGI", format="%.2f%%"),
+                    },
+                )
+            st.caption(
+                f"Source: IRS SOI ZIP Code data, tax year {irs_df.attrs.get('tax_year', '?')} "
+                f"({irs_df.attrs.get('source', '')}). Amounts are as reported by the IRS "
+                "(rounded; small ZIPs may be suppressed)."
+            )
+    else:
+        st.info("Click **Load IRS ZIP data** to fetch it (one-time download, then cached).")
 
 # ---- Tab 3: Small business targeting ----
 with tab_biz:

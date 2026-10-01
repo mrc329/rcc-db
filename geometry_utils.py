@@ -48,4 +48,14 @@ def get_westfield_block_groups():
     bgs = bgs.to_crs(westfield.crs)
     westfield_bgs = gpd.sjoin(bgs, westfield[["geometry"]], how="inner", predicate="intersects")
     westfield_bgs = westfield_bgs.drop(columns=["index_right"])
+
+    # Share of each block group's land inside the town line, so edge block
+    # groups that are mostly in a neighboring town can be spotted. Areas
+    # are computed in NJ State Plane (EPSG:3424), an equal-area-enough
+    # projection at this scale; lat/lon degrees can't be used for area.
+    town = westfield.to_crs(3424).geometry.union_all()
+    projected = westfield_bgs.to_crs(3424).geometry
+    westfield_bgs["pct_area_in_westfield"] = (
+        projected.intersection(town).area / projected.area * 100
+    ).round(0)
     return westfield_bgs

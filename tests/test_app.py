@@ -136,3 +136,47 @@ def test_walkable_filter(fake_census, fake_places):
     assert len(editor) > 0
     assert (editor["meters_to_rialto"] <= pu.WALKING_DISTANCE_M).all()
     assert not any("Rialto location is approximate" in w.value for w in at.warning)
+
+
+def test_ranked_block_groups_and_home_values(fake_census, monkeypatch):
+    monkeypatch.delenv("GOOGLE_PLACES_API_KEY", raising=False)
+    at = _run()
+    assert not at.exception
+    ranked = next(d.value for d in at.dataframe if "Rank" in d.value.columns)
+    assert list(ranked["Rank"]) == list(range(1, len(ranked) + 1))
+    assert ranked["HH $200k+"].is_monotonic_decreasing
+    assert {"Homes $1M+", "% in Westfield"} <= set(ranked.columns)
+    # Fake block groups are drawn fully inside the fake town box
+    assert (ranked["% in Westfield"] == 100).all()
+
+    next(s for s in at.selectbox if s.label == "Rank by").set_value("Homes worth $1M+")
+    at.run()
+    ranked = next(d.value for d in at.dataframe if "Rank" in d.value.columns)
+    assert ranked["Homes $1M+"].is_monotonic_decreasing
+    assert "Owner-occupied homes worth $1M+" in at.radio[0].options
+
+
+def test_irs_tab(fake_census, monkeypatch):
+    import fakes
+    import irs_utils
+    monkeypatch.delenv("GOOGLE_PLACES_API_KEY", raising=False)
+    irs = fakes.FakeIRS()
+    # census_utils and irs_utils share the requests module, so route by host.
+    monkeypatch.setattr(irs_utils.requests, "get", lambda url, **kw: (
+        irs.get(url, **kw) if "irs.gov" in url else fakes.fake_census_get(url, **kw)))
+    irs_utils.fetch_nj_zip_giving.clear()
+
+    at = _run()
+    _button(at, "Load IRS ZIP data").click()
+    at.run()
+    assert not at.exception, at.exception
+    assert not at.error, [e.value for e in at.error]
+    by_label = {m.label: m.value for m in at.metric}
+    assert by_label["Westfield (07090): returns claiming charity"] == "60%"
+    assert by_label["Avg. deduction per claiming return"] == "$15,000"
+    assert any("tax year 2022" in c.value for c in at.caption)
+
+    # Stays loaded on rerun without clicking again
+    at.run()
+    assert "Avg. deduction per claiming return" in [m.label for m in at.metric]
+    irs_utils.fetch_nj_zip_giving.clear()

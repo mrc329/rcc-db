@@ -233,3 +233,43 @@ class FakeSession:
 
     def __exit__(self, *exc):
         return False
+
+
+# --- IRS SOI ZIP files --------------------------------------------------------
+
+# Full file layout: one row per ZIP per AGI bracket (agi_stub 1-6), lowercase
+# 'zipcode' as in recent years. Amounts in thousands.
+IRS_ALLAGI = """STATEFIPS,STATE,zipcode,agi_stub,N1,mars1,A00100,N19700,A19700
+34,NJ,00000,1,100000,1,5000000,10000,90000
+34,NJ,07090,5,4000,10,600000,1500,9000
+34,NJ,07090,6,6000,20,4000000,4500,81000
+34,NJ,07016,5,5000,10,700000,1200,6000
+34,NJ,07016,6,3000,20,1500000,1800,24000
+34,NJ,99999,6,10,1,100,1,10
+36,NY,10001,6,9999,1,9999999,9999,99999
+"""
+
+
+class FakeStreamResponse(FakeResponse):
+    def __init__(self, status_code, text=""):
+        super().__init__(status_code, text=text)
+        self.encoding = "utf-8"
+
+    def iter_lines(self, decode_unicode=False):
+        return iter(self.text.splitlines())
+
+    def close(self):
+        pass
+
+
+class FakeIRS:
+    """23zpallnoagi -> 404, 23zpallagi -> 404, 22zpallnoagi -> 404, 22zpallagi -> data."""
+
+    def __init__(self):
+        self.urls = []
+
+    def get(self, url, stream=False, timeout=None):
+        self.urls.append(url)
+        if url.endswith("22zpallagi.csv"):
+            return FakeStreamResponse(200, IRS_ALLAGI)
+        return FakeStreamResponse(404, "")
