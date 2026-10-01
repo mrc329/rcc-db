@@ -8,6 +8,7 @@ prospect research:
   gifts ($5,000+, the fundraising consultant's portfolio) and the
   community campaign (under $5,000). A rule-of-thumb major-gift range
   chart (editable) with prospects needed, and a community calculator:
+  named seats ($2,500) and bricks ($1,000) counted first, then general
   gifts and households to ask at a given average gift and response rate,
   against the number of households in the area.
 - **Giving Capacity Map / Demographics** — Census ACS 5-year estimates by

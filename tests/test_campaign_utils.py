@@ -61,10 +61,23 @@ def test_major_chart_sizes_lead_off_full_campaign():
     assert (chart["gift_amount"] >= cu.MAJOR_GIFT_THRESHOLD).all()
 
 
-def test_community_plan():
-    assert cu.community_plan(500_000, 250, 5) == {
-        "target": 500_000, "gifts": 2_000, "households_to_ask": 40_000}
-    assert cu.community_plan(100_000, 300, 20)["households_to_ask"] == 1_670  # ceil(334 / 0.2)
+def test_community_plan_with_naming():
+    plan = cu.community_plan_with_naming(500_000, seats=100, bricks=200, avg_gift=250,
+                                         response_rate_pct=5)
+    assert plan["seats_total"] == 250_000
+    assert plan["bricks_total"] == 200_000
+    assert plan["general_needed"] == 50_000
+    assert plan["general_gifts"] == 200
+    assert plan["total_gifts"] == 500
+    assert plan["households_to_ask"] == 10_000
+    assert plan["surplus"] == 0
+
+    over = cu.community_plan_with_naming(500_000, seats=200, bricks=100, avg_gift=250,
+                                         response_rate_pct=10)
+    assert over["general_gifts"] == 0
+    assert over["surplus"] == 100_000
+    assert over["households_to_ask"] == 3_000
+
     import pytest
     with pytest.raises(ValueError):
-        cu.community_plan(1, 0, 5)
+        cu.community_plan_with_naming(1, 0, 0, 0, 5)

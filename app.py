@@ -190,28 +190,51 @@ with tab_plan:
         "and response rate are assumptions — warm, personal asks to people who know the "
         "Rialto respond far better than mail to strangers."
     )
+    st.markdown(
+        f"**Named gifts:** seats at \\${campaign_utils.SEAT_PRICE:,}, bricks at "
+        f"\\${campaign_utils.BRICK_PRICE:,} — counted first; general gifts cover the rest."
+    )
+    n1, n2, n3 = st.columns(3)
+    seats_available = n1.number_input(
+        "Seats available to name (optional)", min_value=0, value=None, step=10,
+        help="The new hall's seat count, if known. Used only to flag plans that sell more "
+             "seats than exist.")
+    seats = n2.number_input("Seats to sell", min_value=0, step=10,
+                            value=campaign_utils.SEATS_TO_SELL_DEFAULT)
+    bricks = n3.number_input("Bricks to sell", min_value=0, step=25,
+                             value=campaign_utils.BRICKS_TO_SELL_DEFAULT)
+    if seats_available is not None and seats > seats_available:
+        st.warning(f"The plan sells {seats:,} seats but only {seats_available:,} are available.")
     cc1, cc2 = st.columns(2)
-    avg_gift = cc1.number_input("Average community gift ($)", 25, threshold - 1,
+    avg_gift = cc1.number_input("Average general (non-named) gift ($)", 25, threshold - 1,
                                 campaign_utils.COMMUNITY_AVG_GIFT_DEFAULT, step=25)
     response_rate = cc2.number_input("Response rate (% of households asked who give)",
                                      1, 50, campaign_utils.COMMUNITY_RESPONSE_RATE_DEFAULT)
     if community_target > 0:
-        plan = campaign_utils.community_plan(community_target, avg_gift, response_rate)
+        plan = campaign_utils.community_plan_with_naming(
+            community_target, seats, bricks, avg_gift, response_rate)
         area_households = merged["households_total"].sum(min_count=1) if merged is not None else None
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Community gifts needed", f"{plan['gifts']:,}")
-        m2.metric("Households to ask", f"{plan['households_to_ask']:,}")
-        m3.metric("Households in Westfield-area block groups",
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Seats + bricks", f"${plan['named_total']:,.0f}",
+                  help=f"Seats ${plan['seats_total']:,.0f} + bricks ${plan['bricks_total']:,.0f}")
+        m2.metric("General gifts needed", f"{plan['general_gifts']:,}",
+                  help=f"${plan['general_needed']:,.0f} still needed after named gifts.")
+        m3.metric("Households to ask", f"{plan['households_to_ask']:,}",
+                  help=f"{plan['total_gifts']:,} total gifts (seats + bricks + general) "
+                       f"at a {response_rate}% response rate.")
+        m4.metric("Households in Westfield-area block groups",
                   "n/a" if area_households is None or pd.isna(area_households)
                   else f"{area_households:,.0f}")
+        if plan["surplus"]:
+            st.success(f"Seats and bricks alone exceed the community target by "
+                       f"${plan['surplus']:,.0f}.")
         if area_households and not pd.isna(area_households) \
                 and plan["households_to_ask"] > area_households:
             st.warning(
                 f"Reaching this target means asking {plan['households_to_ask']:,} households — "
                 f"about {plan['households_to_ask'] / area_households:.1f}× every household in "
-                "the area. Either the community share is too high for Westfield alone, the "
-                "average gift needs to be bigger (e.g. a named-seat or brick program), or the "
-                "ask has to reach neighboring towns."
+                "the area. Sell more seats and bricks, raise the average gift, assume warmer "
+                "asks (a higher response rate), or reach beyond Westfield."
             )
     else:
         st.info("Community campaign share is 0% — the whole goal is in the major-gift chart.")

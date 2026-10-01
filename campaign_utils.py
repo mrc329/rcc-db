@@ -25,6 +25,13 @@ COMMUNITY_SHARE_DEFAULT = 5          # % of goal
 COMMUNITY_AVG_GIFT_DEFAULT = 250     # $
 COMMUNITY_RESPONSE_RATE_DEFAULT = 5  # % of households asked who give
 
+# Named-gift program prices (community level: both are under the
+# major-gift threshold, though a donor buying several can cross it).
+SEAT_PRICE = 2_500
+BRICK_PRICE = 1_000
+SEATS_TO_SELL_DEFAULT = 100
+BRICKS_TO_SELL_DEFAULT = 200
+
 # From the campaign's "Campaign Milestones" slide. Milestone Two reads
 # "$3.5M cash / $1M pledges"; it's taken here as $3.5M cash PLUS $1M
 # pledged ($4.5M committed). Milestones Three and Four are cash and
@@ -133,14 +140,29 @@ def milestone_pace(raised_committed, raised_cash, today=None):
     return out
 
 
-def community_plan(target, avg_gift, response_rate_pct):
+def community_plan_with_naming(target, seats, bricks, avg_gift, response_rate_pct):
     """
-    Gifts and households needed for the community (sub-major-gift)
-    campaign: gifts = target / average gift; households to ask = gifts /
-    response rate.
+    Community campaign with named seats and bricks counted first; the
+    rest of `target` comes from general gifts at `avg_gift`. Households to
+    ask assumes one gift per giving household (seat, brick or general) at
+    `response_rate_pct`.
     """
     if avg_gift <= 0 or response_rate_pct <= 0:
         raise ValueError("average gift and response rate must be positive")
-    gifts = math.ceil(target / avg_gift)
-    households = math.ceil(gifts / (response_rate_pct / 100))
-    return {"target": target, "gifts": gifts, "households_to_ask": households}
+    seats_total = seats * SEAT_PRICE
+    bricks_total = bricks * BRICK_PRICE
+    named_total = seats_total + bricks_total
+    general_needed = max(0, target - named_total)
+    general_gifts = math.ceil(general_needed / avg_gift)
+    total_gifts = seats + bricks + general_gifts
+    return {
+        "target": target,
+        "seats_total": seats_total,
+        "bricks_total": bricks_total,
+        "named_total": named_total,
+        "general_needed": general_needed,
+        "general_gifts": general_gifts,
+        "total_gifts": total_gifts,
+        "households_to_ask": math.ceil(total_gifts / (response_rate_pct / 100)),
+        "surplus": max(0, named_total - target),
+    }

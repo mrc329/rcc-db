@@ -196,8 +196,10 @@ def test_campaign_plan_tab(fake_census, monkeypatch):
     assert by_label["Community campaign (under $5,000)"] == "$0.50M"
     assert by_label["Major-gift chart total"] == "$9.50M"
     assert by_label["Gifts needed"] == "57"
-    assert by_label["Community gifts needed"] == "2,000"
-    assert by_label["Households to ask"] == "40,000"
+    # Default 100 seats ($250k) + 200 bricks ($200k) + 200 general gifts ($50k)
+    assert by_label["Seats + bricks"] == "$450,000"
+    assert by_label["General gifts needed"] == "200"
+    assert by_label["Households to ask"] == "10,000"
     # Fake area has far fewer households than 40,000 -> warning
     assert any("every household in the area" in w.value for w in at.warning)
 
@@ -206,6 +208,11 @@ def test_campaign_plan_tab(fake_census, monkeypatch):
     at.run()
     pace = next(d.value for d in at.dataframe if "monthly_pace_needed" in d.value.columns)
     assert pace.loc[pace["milestone"] == "One", "gap_committed"].iloc[0] == 2_000_000
+
+    seats_avail = next(n for n in at.number_input if n.label.startswith("Seats available"))
+    seats_avail.set_value(80)
+    at.run()
+    assert any("only 80 are available" in w.value for w in at.warning)
 
     next(s for s in at.slider if s.label.startswith("Community campaign share")).set_value(0)
     at.run()
