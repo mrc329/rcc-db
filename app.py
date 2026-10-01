@@ -6,10 +6,13 @@ Built for Rialto Center for Creativity capital campaign prospect research.
 Two data layers:
   1. Census ACS income + demographics, mapped by block group (GIS layer)
   2. Small business targeting by NAICS sector — Census gives aggregate
-     establishment COUNTS only (no names/addresses, by design). For an
-     actual named prospect list, upload your own business roster below
-     (e.g. Chamber of Commerce membership list) and the app will map
-     and filter it alongside the income data.
+     establishment COUNTS only (no names/addresses, by design). Named
+     businesses come from the Google Places API, each mapped to a NAICS
+     sector and tagged with a heuristic chain/independent label.
+
+Secrets (Streamlit Cloud: app Settings -> Secrets; locally:
+.streamlit/secrets.toml — see secrets.toml.example):
+  CENSUS_API_KEY, GOOGLE_PLACES_API_KEY
 """
 
 import streamlit as st
@@ -20,9 +23,10 @@ from census_utils import (
     fetch_block_group_acs,
     fetch_naics_establishment_counts,
     fetch_naics_employment_size_class,
-    NAICS_SECTORS,
 )
-from geometry_utils import get_westfield_block_groups
+from config import get_secret
+from geometry_utils import get_westfield_block_groups, get_westfield_boundary
+import places_utils
 
 st.set_page_config(page_title="Westfield Giving & Business Dashboard", layout="wide")
 
@@ -57,7 +61,7 @@ except Exception as e:
 with tab_map:
     st.subheader("Median Household Income by Block Group")
     if merged is not None:
-        fig = px.choropleth_mapbox(
+        fig = px.choropleth_map(
             merged,
             geojson=merged.geometry.__geo_interface__,
             locations=merged.index,
@@ -68,7 +72,7 @@ with tab_map:
                 "total_population": True,
                 "median_age": True,
             },
-            mapbox_style="carto-positron",
+            map_style="carto-positron",
             center={"lat": 40.6589, "lon": -74.3479},  # Westfield, NJ
             zoom=12.5,
             opacity=0.65,
@@ -82,7 +86,8 @@ with tab_map:
 
     st.caption(
         "Block groups shown are those intersecting Westfield's town boundary; "
-        "some may extend slightly beyond the town line."
+        "some may extend slightly beyond the town line. "
+        f"Source: ACS 5-year estimates, {acs_df.attrs.get('acs_year', '?')} vintage."
     )
 
 # ---- Tab 2: Demographics ----
@@ -163,49 +168,132 @@ with tab_biz:
     st.dataframe(size_df, use_container_width=True)
 
     st.divider()
-    st.subheader("Upload Your Own Business Prospect List")
-    st.markdown(
-        """
-        For an actual **named** prospect list, upload a CSV with your own
-        business roster (e.g. from the Westfield Chamber of Commerce,
-        a membership directory, or a manually compiled list). Required
-        columns:
-
-        - `name` — business name
-        - `address` — street address
-        - `lat`, `lon` — coordinates (geocode addresses first if you don't have these —
-          the free Census Geocoder at https://geocoding.geo.census.gov can batch-geocode a CSV)
-        - `naics_sector` — one of: """ + ", ".join(NAICS_SECTORS.values())
+    st.subheader("Named Businesses (Google Places)")
+    st.caption(
+        f"Businesses within {places_utils.SEARCH_RADIUS_KM:g} km of downtown Westfield, "
+        "found via Google Places text searches, each mapped to the closest NAICS "
+        "sector from its Google place type. The radius reaches into neighboring "
+        "towns — use the boundary filter below to keep only Westfield proper."
     )
 
-    uploaded = st.file_uploader("Upload business list (CSV)", type="csv")
-    if uploaded:
-        biz_df = pd.read_csv(uploaded)
-        required_cols = {"name", "address", "lat", "lon", "naics_sector"}
-        missing = required_cols - set(biz_df.columns)
-        if missing:
-            st.error(f"Missing required columns: {missing}")
-        else:
-            sectors_selected = st.multiselect(
-                "Filter by sector", options=biz_df["naics_sector"].unique().tolist(),
-                default=biz_df["naics_sector"].unique().tolist(),
-            )
-            filtered = biz_df[biz_df["naics_sector"].isin(sectors_selected)]
+    if not get_secret("GOOGLE_PLACES_API_KEY"):
+        st.info(
+            "Add `GOOGLE_PLACES_API_KEY` to this app's secrets to enable the "
+            "business search (see `.streamlit/secrets.toml.example`)."
+        )
+        st.stop()
 
-            fig5 = px.scatter_mapbox(
-                filtered, lat="lat", lon="lon", hover_name="name",
-                hover_data=["address", "naics_sector"],
-                color="naics_sector", zoom=12.5,
-                center={"lat": 40.6589, "lon": -74.3479},
-                mapbox_style="carto-positron", height=550,
-            )
-            fig5.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
-            st.plotly_chart(fig5, use_container_width=True)
+    categories = st.multiselect(
+        "Business categories to search",
+        options=list(places_utils.SEARCH_CATEGORIES),
+        default=list(places_utils.SEARCH_CATEGORIES),
+    )
+    run_chain_check = st.checkbox(
+        "Run multi-location chain check",
+        value=True,
+        help="For each business not on the known-chain list, searches New Jersey "
+             "for other locations with the same name (one API call per name).",
+    )
+    col_a, col_b = st.columns([1, 1])
+    if col_a.button("Search Google Places", type="primary", disabled=not categories):
+        st.session_state["places_query"] = (tuple(categories), run_chain_check)
+    if col_b.button("Clear cached results",
+                    help="Results are cached for a week; this forces fresh API calls."):
+        places_utils.clear_places_cache()
+        st.session_state.pop("places_query", None)
 
-            st.download_button(
-                "Download filtered prospect list (CSV)",
-                data=filtered.to_csv(index=False),
-                file_name="westfield_business_prospects_filtered.csv",
-                mime="text/csv",
+    if "places_query" not in st.session_state:
+        st.info("Pick categories and click **Search Google Places**. "
+                "Results are cached, so repeat searches don't re-bill.")
+        st.stop()
+
+    query_categories, query_chain_check = st.session_state["places_query"]
+    try:
+        with st.spinner("Searching Google Places..."):
+            biz_df = places_utils.fetch_westfield_businesses(query_categories)
+        with st.spinner(f"Classifying {len(biz_df)} businesses (chain check)..."):
+            biz_df = places_utils.classify_businesses(
+                biz_df, run_multi_location_check=query_chain_check
             )
-            st.dataframe(filtered)
+    except places_utils.PlacesAPIError as e:
+        st.error(str(e))
+        st.stop()
+
+    if biz_df.empty:
+        st.warning("Google Places returned no businesses for those categories.")
+        st.stop()
+
+    # Flag businesses inside the actual town boundary (the search circle
+    # spills into Garwood, Cranford, Scotch Plains, Mountainside).
+    try:
+        import geopandas as gpd
+        boundary = get_westfield_boundary().to_crs("EPSG:4326").geometry.union_all()
+        points = gpd.points_from_xy(biz_df["lon"], biz_df["lat"], crs="EPSG:4326")
+        biz_df["in_westfield_boundary"] = points.within(boundary)
+    except Exception:
+        biz_df["in_westfield_boundary"] = pd.NA
+
+    st.warning(
+        "**Chain / independent labels are a heuristic, not a fact.** "
+        "\"Known chain\" = name matches `known_chains.txt` (many franchises are still "
+        "locally owned). \"Likely chain — multiple locations\" = the same name appears "
+        f"at {places_utils.MIN_LOCATIONS}+ NJ locations in {places_utils.MIN_TOWNS}+ towns, "
+        "which can also catch small local multi-shop owners or unrelated businesses with "
+        "generic names. Check the note column before relying on a label."
+    )
+
+    f1, f2, f3 = st.columns([2, 2, 1])
+    sector_options = sorted(biz_df["sector"].unique())
+    sectors_selected = f1.multiselect("Filter by sector", sector_options, default=sector_options)
+    status_options = [s for s in places_utils.FRANCHISE_LABELS
+                      if s in set(biz_df["franchise_status"])]
+    statuses_selected = f2.multiselect("Filter by chain / independent", status_options,
+                                       default=status_options)
+    boundary_known = biz_df["in_westfield_boundary"].notna().all()
+    only_in_town = f3.checkbox("Inside Westfield town line only", value=False,
+                               disabled=not boundary_known,
+                               help=None if boundary_known else
+                               "Town boundary unavailable (needs census.gov access).")
+
+    filtered = biz_df[
+        biz_df["sector"].isin(sectors_selected)
+        & biz_df["franchise_status"].isin(statuses_selected)
+    ]
+    if only_in_town:
+        filtered = filtered[filtered["in_westfield_boundary"] == True]  # noqa: E712
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Businesses shown", len(filtered))
+    m2.metric("Likely independent",
+              int((filtered["franchise_status"] == places_utils.LABEL_INDEPENDENT).sum()))
+    m3.metric("Chains (known + likely)",
+              int(filtered["franchise_status"].isin(
+                  [places_utils.LABEL_KNOWN, places_utils.LABEL_MULTI]).sum()))
+
+    if not filtered.empty:
+        fig5 = px.scatter_map(
+            filtered, lat="lat", lon="lon", hover_name="name",
+            hover_data={"address": True, "sector": True, "franchise_status": True,
+                        "lat": False, "lon": False},
+            color="franchise_status",
+            category_orders={"franchise_status": places_utils.FRANCHISE_LABELS},
+            zoom=13, center={"lat": 40.6589, "lon": -74.3479},
+            map_style="carto-positron", height=550,
+        )
+        fig5.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
+        st.plotly_chart(fig5, use_container_width=True)
+
+    export_cols = [
+        "name", "address", "lat", "lon", "sector", "naics_code", "franchise_status",
+        "classification_note", "place_id", "sector_basis", "google_primary_type",
+        "in_westfield_boundary", "distance_km", "nj_same_name_locations",
+        "nj_same_name_towns", "chain_match", "search_category",
+    ]
+    export_df = filtered[export_cols]
+    st.download_button(
+        "Download filtered list (CSV)",
+        data=export_df.to_csv(index=False),
+        file_name="westfield_business_prospects_filtered.csv",
+        mime="text/csv",
+    )
+    st.dataframe(export_df, use_container_width=True, hide_index=True)

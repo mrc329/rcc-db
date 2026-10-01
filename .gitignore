@@ -1,0 +1,9 @@
+# Real secrets — only the .example template is committed
+.streamlit/secrets.toml
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.DS_Store

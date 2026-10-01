@@ -1,7 +1,8 @@
-streamlit
-pandas
-requests
-geopandas
-pygris
-plotly
-shapely
+streamlit>=1.40,<2
+pandas>=2.0
+requests>=2.31
+geopandas>=1.0
+pygris>=0.1.6
+# plotly 6 added choropleth_map/scatter_map; 7 removed the old *_mapbox functions.
+plotly>=6.0
+shapely>=2.0

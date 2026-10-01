@@ -1,0 +1,379 @@
+# Known chains / franchises — matched against Google Places business names.
+#
+# One name per line. Matching ignores case, punctuation, apostrophes and
+# accents, and treats "&" as "and". A name matches if the business name
+# equals it or starts with it (so "dunkin" matches "Dunkin' Donuts" and
+# "cvs" matches "CVS Pharmacy"); multi-word names also match anywhere in
+# the business name ("ATM (Bank of America)").
+#
+# Add " | exact" after a name that's also a common word, so it only
+# matches the business name exactly (e.g. "gap | exact" won't catch
+# "Gap Insurance Agency").
+#
+# Caveats worth knowing when you use the results:
+#  - Many franchise locations are locally owned (Dunkin', Kumon, State
+#    Farm and Edward Jones offices, Ace Hardware, real-estate brokerages).
+#    "Known chain" means brand-level, not "no local decision-maker".
+#  - Regional NJ chains (ShopRite, Kings, Valley Bank) are here too.
+#
+# --- Food & drink ---
+mcdonalds
+starbucks
+dunkin
+subway
+chipotle
+panera bread
+dominos
+pizza hut
+papa johns
+burger king
+wendys
+taco bell
+kfc
+chick fil a
+five guys
+shake shack
+jersey mikes
+jimmy johns
+qdoba
+sweetgreen
+cava | exact
+just salad
+chopt
+dig | exact
+playa bowls
+ritas italian ice
+carvel
+baskin robbins
+dairy queen
+cold stone creamery
+ben and jerrys
+haagen dazs
+auntie annes
+wingstop
+buffalo wild wings
+panda express
+popeyes
+smashburger
+bareburger
+burgerfi
+applebees
+chilis
+olive garden
+red robin
+the cheesecake factory
+cheesecake factory
+pf changs
+bonefish grill
+outback steakhouse
+texas roadhouse
+ihop
+dennys
+tim hortons
+krispy kreme
+insomnia cookies
+crumbl
+nothing bundt cakes
+tropical smoothie cafe
+smoothie king
+robeks
+jamba
+einstein bros bagels
+blaze pizza
+mod pizza
+and pizza | exact
+potbelly
+firehouse subs
+moes southwest grill
+noodles and company
+wawa
+quickchek
+7 eleven
+kung fu tea
+gong cha
+le pain quotidien
+pret a manger
+paris baguette
+tous les jours
+bonchon
+pokeworks
+halal guys
+arbys
+sonic drive in
+white castle
+boston market
+nathans famous
+primo hoagies
+saladworks
+cosi
+honeygrow
+bluestone lane
+joe and the juice
+# --- Retail ---
+cvs
+walgreens
+rite aid
+target | exact
+walmart
+kohls
+tj maxx
+marshalls
+homegoods
+home depot
+the home depot
+lowes
+best buy
+staples | exact
+barnes and noble
+gamestop
+ulta beauty
+sephora
+bath and body works
+victorias secret
+gap | exact
+old navy
+banana republic
+jcrew
+madewell
+lululemon
+athleta
+talbots
+chicos
+loft | exact
+ann taylor
+anthropologie
+urban outfitters
+free people
+brooks brothers
+vineyard vines
+lucky brand
+levis
+nike | exact
+nike store
+nike clearance store
+foot locker
+famous footwear
+dsw
+skechers
+sally beauty
+gnc
+the vitamin shoppe
+vitamin shoppe
+petsmart
+petco
+pet valu
+michaels | exact
+joann
+hobby lobby
+party city
+five below
+dollar tree
+dollar general
+family dollar
+shoprite
+stop and shop
+acme markets
+whole foods market
+trader joes
+kings food markets
+wegmans
+aldi
+lidl
+costco
+bjs wholesale club
+harmon | exact
+harmon face values
+pottery barn
+williams sonoma
+crate and barrel
+west elm
+rh | exact
+ethan allen
+mattress firm
+sleep number
+verizon
+at and t
+t mobile
+apple | exact
+apple store
+total wine
+bottle king
+joe canals
+ace hardware
+true value
+sherwin williams
+benjamin moore
+the ups store
+fedex office
+hallmark | exact
+hallmark shop
+kiehls
+loccitane
+lush | exact
+warby parker
+pandora | exact
+kay jewelers
+zales
+jared | exact
+tiffany and co
+alex and ani
+kendra scott
+learning express
+janie and jack
+carters
+the childrens place
+hanna andersson
+orvis
+llbean
+patagonia
+rei | exact
+rei co op
+dicks sporting goods
+play it again sports
+paper source
+yankee candle
+lovesac
+cricket wireless
+metro by t mobile
+boost mobile
+sunoco
+exxon
+shell | exact
+bp | exact
+mobil
+gulf | exact
+speedway | exact
+delta | exact
+# --- Finance & insurance ---
+chase | exact
+chase bank
+jpmorgan chase
+bank of america
+wells fargo
+td bank
+pnc bank
+citibank
+citi | exact
+santander bank
+valley bank
+m and t bank
+provident bank
+columbia bank
+investors bank
+citizens bank
+capital one
+keybank
+truist
+fulton bank
+peapack private
+lakeland bank
+spencer savings bank
+kearny bank
+first commerce bank
+edward jones
+ameriprise
+morgan stanley
+merrill
+merrill lynch
+wells fargo advisors
+charles schwab
+fidelity investments
+raymond james
+stifel
+ubs | exact
+lpl financial
+northwestern mutual
+new york life
+massmutual
+prudential
+metlife
+primerica
+state farm
+allstate
+farmers insurance
+liberty mutual
+nationwide insurance
+geico
+progressive | exact
+aflac
+aaa | exact
+western union
+moneygram
+h and r block
+jackson hewitt
+liberty tax
+# --- Real estate ---
+coldwell banker
+keller williams
+re max
+remax
+century 21
+berkshire hathaway homeservices
+compass | exact
+compass real estate
+sothebys international realty
+weichert
+era | exact
+howard hanna
+exp realty
+douglas elliman
+engel and volkers
+better homes and gardens real estate
+# --- Education, health, fitness & personal services ---
+kumon
+mathnasium
+sylvan learning
+huntington learning center
+code ninjas
+the learning experience
+goddard school
+the goddard school
+primrose school
+kiddie academy
+kindercare
+bright horizons
+club pilates
+orangetheory
+planet fitness
+corepower yoga
+pure barre
+soulcycle
+f45 training
+burn boot camp
+retro fitness
+crunch fitness
+la fitness
+blink fitness
+massage envy
+hand and stone
+european wax center
+great clips
+supercuts
+sport clips
+fantastic sams
+drybar
+the joint chiropractic
+citymd
+quest diagnostics
+labcorp
+aspen dental
+pearle vision
+lenscrafters
+visionworks
+americas best
+jiffy lube
+midas | exact
+meineke
+firestone
+pep boys
+valvoline
+monro auto service
+goodyear
+mavis | exact
+mavis discount tire
+servpro
+two men and a truck
+molly maid
+merry maids
+mr rooter
+roto rooter
