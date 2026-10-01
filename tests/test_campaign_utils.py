@@ -52,3 +52,19 @@ def test_milestone_met_and_past_due():
     pace = cu.milestone_pace(100_000, 100_000, today=date(2027, 1, 15)).set_index("milestone")
     assert pace.loc["One", "status"] == "past due"
     assert pace.loc["Two", "status"] == "open"
+
+
+def test_major_chart_sizes_lead_off_full_campaign():
+    chart = cu.gift_range_chart(goal=9_500_000, lead_of=cu.CAMPAIGN_GOAL)
+    assert chart["gift_amount"].iloc[0] == 1_500_000
+    assert chart["level_total"].sum() == 9_500_000
+    assert (chart["gift_amount"] >= cu.MAJOR_GIFT_THRESHOLD).all()
+
+
+def test_community_plan():
+    assert cu.community_plan(500_000, 250, 5) == {
+        "target": 500_000, "gifts": 2_000, "households_to_ask": 40_000}
+    assert cu.community_plan(100_000, 300, 20)["households_to_ask"] == 1_670  # ceil(334 / 0.2)
+    import pytest
+    with pytest.raises(ValueError):
+        cu.community_plan(1, 0, 5)

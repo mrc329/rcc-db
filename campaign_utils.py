@@ -15,6 +15,16 @@ import pandas as pd
 
 CAMPAIGN_GOAL = 10_000_000
 
+# The Rialto's definition of a major gift (the consultant's portfolio).
+# Gifts below this are the community campaign.
+MAJOR_GIFT_THRESHOLD = 5_000
+
+# Community campaign defaults — editable in the app. Capital campaigns
+# typically raise roughly 5-15% from gifts below the major-gift line.
+COMMUNITY_SHARE_DEFAULT = 5          # % of goal
+COMMUNITY_AVG_GIFT_DEFAULT = 250     # $
+COMMUNITY_RESPONSE_RATE_DEFAULT = 5  # % of households asked who give
+
 # From the campaign's "Campaign Milestones" slide. Milestone Two reads
 # "$3.5M cash / $1M pledges"; it's taken here as $3.5M cash PLUS $1M
 # pledged ($4.5M committed). Milestones Three and Four are cash and
@@ -42,16 +52,18 @@ def _round_lead(amount):
 
 
 def gift_range_chart(goal=CAMPAIGN_GOAL, lead_pct=15, prospects_top=4, prospects_rest=3,
-                     top_threshold=250_000):
+                     top_threshold=250_000, lead_of=None):
     """
-    Build a gift range chart reaching `goal`.
+    Build a gift range chart reaching `goal`. The lead gift is `lead_pct`
+    percent of `lead_of` (default: `goal`), so a chart for just the
+    major-gift portion can still size its lead gift off the full campaign.
 
     Returns a DataFrame with gift_amount, gifts, level_total,
     cumulative_total, pct_of_goal, prospects_per_gift, prospects_needed.
     Levels at or above `top_threshold` use `prospects_top` prospects per
     gift (bigger asks close less often); the rest use `prospects_rest`.
     """
-    lead = _round_lead(goal * lead_pct / 100)
+    lead = _round_lead((lead_of or goal) * lead_pct / 100)
     share = lead  # each level aims to raise about the lead gift's amount
     rows, cumulative = [], 0
     amounts = [lead] + [a for a in STANDARD_LEVELS if a < lead]
@@ -119,3 +131,16 @@ def milestone_pace(raised_committed, raised_cash, today=None):
     for col in ("target_cash", "gap_cash", "monthly_pace_needed"):
         out[col] = out[col].round(0).astype("Int64")
     return out
+
+
+def community_plan(target, avg_gift, response_rate_pct):
+    """
+    Gifts and households needed for the community (sub-major-gift)
+    campaign: gifts = target / average gift; households to ask = gifts /
+    response rate.
+    """
+    if avg_gift <= 0 or response_rate_pct <= 0:
+        raise ValueError("average gift and response rate must be positive")
+    gifts = math.ceil(target / avg_gift)
+    households = math.ceil(gifts / (response_rate_pct / 100))
+    return {"target": target, "gifts": gifts, "households_to_ask": households}

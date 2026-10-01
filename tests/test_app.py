@@ -189,12 +189,17 @@ def test_irs_tab(fake_census, monkeypatch):
 def test_campaign_plan_tab(fake_census, monkeypatch):
     monkeypatch.delenv("GOOGLE_PLACES_API_KEY", raising=False)
     at = _run()
-    assert not at.exception
+    assert not at.exception, at.exception
     by_label = {m.label: m.value for m in at.metric}
-    assert by_label["Chart total"] == "$10.00M"
-    assert by_label["Gifts needed"] == "77"
-    assert by_label["Qualified prospects needed"] == "243"
-    assert "Westfield-area households earning $200k+" in by_label
+    # Default: 5% community ($500k), $9.5M major gifts with a $1.5M lead
+    assert by_label["Major gifts ($5,000+) — consultant's portfolio"] == "$9.50M"
+    assert by_label["Community campaign (under $5,000)"] == "$0.50M"
+    assert by_label["Major-gift chart total"] == "$9.50M"
+    assert by_label["Gifts needed"] == "57"
+    assert by_label["Community gifts needed"] == "2,000"
+    assert by_label["Households to ask"] == "40,000"
+    # Fake area has far fewer households than 40,000 -> warning
+    assert any("every household in the area" in w.value for w in at.warning)
 
     next(n for n in at.number_input if n.label.startswith("Raised to date")).set_value(1_000_000)
     next(n for n in at.number_input if n.label.startswith("Of which cash")).set_value(800_000)
@@ -202,6 +207,9 @@ def test_campaign_plan_tab(fake_census, monkeypatch):
     pace = next(d.value for d in at.dataframe if "monthly_pace_needed" in d.value.columns)
     assert pace.loc[pace["milestone"] == "One", "gap_committed"].iloc[0] == 2_000_000
 
-    next(s for s in at.slider if s.label.startswith("Lead gift")).set_value(20)
+    next(s for s in at.slider if s.label.startswith("Community campaign share")).set_value(0)
     at.run()
-    assert {m.label: m.value for m in at.metric}["Gifts needed"] == "35"
+    by_label = {m.label: m.value for m in at.metric}
+    assert by_label["Major-gift chart total"] == "$10.00M"
+    assert by_label["Gifts needed"] == "77"
+    assert any("share is 0%" in i.value for i in at.info)

@@ -119,39 +119,58 @@ with tab_plan:
         },
     )
 
-    st.subheader("Gift Range Chart")
+    threshold = campaign_utils.MAJOR_GIFT_THRESHOLD
+    st.subheader("Major Gifts vs. Community Campaign")
+    community_share = st.slider(
+        f"Community campaign share of goal (gifts under ${threshold:,})", 0, 20,
+        campaign_utils.COMMUNITY_SHARE_DEFAULT, format="%d%%",
+        help="Capital campaigns typically raise roughly 5–15% below the major-gift line.")
+    community_target = campaign_utils.CAMPAIGN_GOAL * community_share / 100
+    major_goal = campaign_utils.CAMPAIGN_GOAL - community_target
+    s1, s2 = st.columns(2)
+    s1.metric(f"Major gifts (${threshold:,}+) — consultant's portfolio", f"${major_goal / 1e6:,.2f}M")
+    s2.metric(f"Community campaign (under ${threshold:,})", f"${community_target / 1e6:,.2f}M")
+
+    st.subheader(f"Major-Gift Range Chart (${threshold:,}+)")
     st.caption(
         "The standard fundraising rule of thumb, not a forecast: a lead gift of 10–20% of the "
-        "goal, each lower level raising about as much as the lead gift, and 3–4 qualified "
-        "prospects per gift (more for the biggest asks). Edit gift counts or ratios to "
-        "match your development plan."
+        "whole campaign, each lower level raising about as much as the lead gift, and 3–4 "
+        "qualified prospects per gift (more for the biggest asks). Real charts usually add a "
+        "longer tail of \\$5k–\\$25k gifts — edit gift counts or ratios to match the "
+        "consultant's plan."
     )
     g1, g2, g3 = st.columns(3)
-    lead_pct = g1.slider("Lead gift (% of goal)", 10, 25, 15)
+    lead_pct = g1.slider("Lead gift (% of campaign goal)", 10, 25, 15)
     prospects_top = g2.number_input("Prospects per gift, $250k+", 2, 8, 4)
     prospects_rest = g3.number_input("Prospects per gift, under $250k", 2, 8, 3)
     chart = campaign_utils.gift_range_chart(
-        lead_pct=lead_pct, prospects_top=prospects_top, prospects_rest=prospects_rest)
+        goal=major_goal, lead_of=campaign_utils.CAMPAIGN_GOAL, lead_pct=lead_pct,
+        prospects_top=prospects_top, prospects_rest=prospects_rest)
     edited_chart = st.data_editor(
         chart[["gift_amount", "gifts", "prospects_per_gift"]],
         num_rows="dynamic", hide_index=True, width="stretch",
-        key=f"gift_chart_{lead_pct}_{prospects_top}_{prospects_rest}",
+        key=f"gift_chart_{lead_pct}_{prospects_top}_{prospects_rest}_{community_share}",
         column_config={
             "gift_amount": st.column_config.NumberColumn("Gift amount", format="dollar", min_value=1),
             "gifts": st.column_config.NumberColumn("Gifts needed", min_value=1),
             "prospects_per_gift": st.column_config.NumberColumn("Prospects per gift", min_value=1),
         },
     )
-    chart = campaign_utils.recompute_chart(edited_chart, prospects_top=prospects_top,
+    chart = campaign_utils.recompute_chart(edited_chart, goal=major_goal,
+                                           prospects_top=prospects_top,
                                            prospects_rest=prospects_rest)
+    below = chart[chart["gift_amount"] < threshold]
+    if not below.empty:
+        st.warning(f"{len(below)} row(s) are under ${threshold:,} — those belong to the "
+                   "community campaign below, not the major-gift chart.")
     total = chart["level_total"].sum()
     c1, c2, c3 = st.columns(3)
-    c1.metric("Chart total", f"${total / 1e6:,.2f}M",
-              help="Edits that leave this below the goal show what's missing.")
+    c1.metric("Major-gift chart total", f"${total / 1e6:,.2f}M",
+              help=f"Target: ${major_goal / 1e6:,.2f}M. Edits that leave this short show what's missing.")
     c2.metric("Gifts needed", f"{chart['gifts'].sum():,}")
     c3.metric("Qualified prospects needed", f"{chart['prospects_needed'].sum():,}")
-    if total < campaign_utils.CAMPAIGN_GOAL:
-        st.warning(f"This chart falls ${(campaign_utils.CAMPAIGN_GOAL - total):,.0f} short of the goal.")
+    if total < major_goal:
+        st.warning(f"This chart falls ${(major_goal - total):,.0f} short of the major-gift goal.")
     st.dataframe(
         chart, hide_index=True, width="stretch",
         column_config={
@@ -159,11 +178,43 @@ with tab_plan:
             "gifts": "Gifts",
             "level_total": st.column_config.NumberColumn("Level total", format="dollar"),
             "cumulative_total": st.column_config.NumberColumn("Cumulative", format="dollar"),
-            "pct_of_goal": st.column_config.NumberColumn("% of goal", format="%.0f%%"),
+            "pct_of_goal": st.column_config.NumberColumn("% of major-gift goal", format="%.0f%%"),
             "prospects_per_gift": "Prospects / gift",
             "prospects_needed": "Prospects needed",
         },
     )
+
+    st.subheader(f"Community Campaign (gifts under ${threshold:,})")
+    st.caption(
+        "How many households you'd need to ask to raise the community share. Average gift "
+        "and response rate are assumptions — warm, personal asks to people who know the "
+        "Rialto respond far better than mail to strangers."
+    )
+    cc1, cc2 = st.columns(2)
+    avg_gift = cc1.number_input("Average community gift ($)", 25, threshold - 1,
+                                campaign_utils.COMMUNITY_AVG_GIFT_DEFAULT, step=25)
+    response_rate = cc2.number_input("Response rate (% of households asked who give)",
+                                     1, 50, campaign_utils.COMMUNITY_RESPONSE_RATE_DEFAULT)
+    if community_target > 0:
+        plan = campaign_utils.community_plan(community_target, avg_gift, response_rate)
+        area_households = merged["households_total"].sum(min_count=1) if merged is not None else None
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Community gifts needed", f"{plan['gifts']:,}")
+        m2.metric("Households to ask", f"{plan['households_to_ask']:,}")
+        m3.metric("Households in Westfield-area block groups",
+                  "n/a" if area_households is None or pd.isna(area_households)
+                  else f"{area_households:,.0f}")
+        if area_households and not pd.isna(area_households) \
+                and plan["households_to_ask"] > area_households:
+            st.warning(
+                f"Reaching this target means asking {plan['households_to_ask']:,} households — "
+                f"about {plan['households_to_ask'] / area_households:.1f}× every household in "
+                "the area. Either the community share is too high for Westfield alone, the "
+                "average gift needs to be bigger (e.g. a named-seat or brick program), or the "
+                "ask has to reach neighboring towns."
+            )
+    else:
+        st.info("Community campaign share is 0% — the whole goal is in the major-gift chart.")
 
     st.subheader("Does Westfield Have the Prospect Pool?")
     if merged is not None:

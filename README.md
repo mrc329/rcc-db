@@ -3,12 +3,25 @@
 Streamlit dashboard for Rialto Center for Creativity capital campaign
 prospect research:
 
+- **Campaign Plan** — the $10M campaign's four milestones and the pace
+  needed to hit each (enter cash and pledges to date), split into major
+  gifts ($5,000+, the fundraising consultant's portfolio) and the
+  community campaign (under $5,000). A rule-of-thumb major-gift range
+  chart (editable) with prospects needed, and a community calculator:
+  gifts and households to ask at a given average gift and response rate,
+  against the number of households in the area.
 - **Giving Capacity Map / Demographics** — Census ACS 5-year estimates by
   block group for Westfield (state 34, county 039, place 79040), mapped
   against TIGER boundaries. Defaults to the count of households earning
   $200k+ (ACS top-codes median income at $250k, so a median map flattens
   out in Westfield). The town-wide median is interpolated from combined
-  income brackets rather than averaged across block-group medians. Also
+  income brackets rather than averaged across block-group medians.
+  A **Mission Fit** section maps the audiences for the Rialto's three
+  program areas: children under 12 (ages ~3-15 at the 2029 opening),
+  households with children, adults 65+, and arts/design/media workers.
+  Non-core Census metrics are selected by their official variable labels
+  (fetched from the API) rather than hard-coded line numbers; a label
+  mismatch shows "n/a" with the reason instead of a wrong number. Also
   maps owner-occupied homes worth $1M+, and ranks block groups for
   canvassing/mailing (with the share of each inside the town line).
 - **Charitable Giving by ZIP** — IRS Statistics of Income ZIP data:
