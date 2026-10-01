@@ -38,8 +38,10 @@ st.set_page_config(page_title="Westfield Giving & Business Dashboard", layout="w
 
 st.title("Westfield, NJ — Giving Capacity & Small Business Dashboard")
 st.caption(
-    "Census ACS income/demographics by block group, plus small-business "
-    "targeting by NAICS sector — built for Rialto capital campaign prospect research."
+    "Prospect research for the Rialto Center for Creativity capital campaign — "
+    "live performance, cultural conversations and hands-on learning, opening 2029. "
+    "Census ACS giving capacity and audience data by block group, IRS giving by ZIP, "
+    "and small-business sponsor targeting."
 )
 
 tab_map, tab_demo, tab_irs, tab_biz = st.tabs(
@@ -72,6 +74,9 @@ MAP_METRICS = {
     "Share of households earning $200k+ (%)": ("pct_hh_200k_plus", ":.0f"),
     "Owner-occupied homes worth $1M+": ("homes_1m_plus", ":,.0f"),
     "Median household income": ("median_household_income", ":$,.0f"),
+    "Children under 12 (learners in 2029)": ("kids_under_12", ":,.0f"),
+    "Adults 65+ (live-performance audience)": ("adults_65_plus", ":,.0f"),
+    "Arts, design & media workers": ("arts_workers", ":,.0f"),
 }
 
 with tab_map:
@@ -137,6 +142,8 @@ with tab_map:
             "Households earning $200k+": "hh_200k_plus",
             "Homes worth $1M+": "homes_1m_plus",
             "Share of households earning $200k+": "pct_hh_200k_plus",
+            "Children under 12 (class outreach)": "kids_under_12",
+            "Adults 65+ (audience outreach)": "adults_65_plus",
         }
         rank_by = st.selectbox("Rank by", list(rank_options))
         ranked = (
@@ -158,6 +165,9 @@ with tab_map:
             "pct_hh_200k_plus": "% HH $200k+",
             "homes_1m_plus": "Homes $1M+",
             "pct_homes_1m_plus": "% owner homes $1M+",
+            "kids_under_12": "Kids <12",
+            "adults_65_plus": "Adults 65+",
+            "arts_workers": "Arts workers",
             "median_income_display": "Median HH income",
             "GEOID": "GEOID",
         }
@@ -258,6 +268,49 @@ with tab_demo:
                 "(or it failed to load): "
                 + "; ".join(f"**{group}** — {reason}" for group, reason in acs_missing.items())
             )
+
+    if merged is not None:
+        st.subheader("Mission Fit: Audiences & Learners")
+        st.caption(
+            "Who the Rialto's three program areas would serve, from the same block groups. "
+            "ACS data describes roughly 2020–2024; by the 2029 opening, today's under-12s "
+            "will be about 3–15 — the core age range for youth classes."
+        )
+
+        def count(col):
+            total = merged[col].sum(min_count=1)
+            return "n/a" if pd.isna(total) else f"{total:,.0f}"
+
+        def with_share(num, den):
+            """'1,234 · 18%' — count plus its share of `den` (no delta arrow)."""
+            n, d = merged[num].sum(min_count=1), merged[den].sum(min_count=1)
+            if pd.isna(n):
+                return "n/a"
+            if pd.isna(d) or d == 0:
+                return f"{n:,.0f}"
+            return f"{n:,.0f} · {n / d * 100:.0f}%"
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Children under 12", count("kids_under_12"),
+                  help="Hands-on learning: youth class prospects (ages ~3–15 in 2029).")
+        k2.metric("Households with children",
+                  with_share("households_with_kids", "households_total"),
+                  help="Count · share of all households. Parents of students are often "
+                       "a program's first donors.")
+        k3.metric("Adults 65+", with_share("adults_65_plus", "total_population"),
+                  help="Count · share of population. Live performance: older adults are the "
+                       "core subscriber audience, and have time for daytime programs and "
+                       "volunteering.")
+        k4.metric("Arts, design & media workers",
+                  with_share("arts_workers", "occupation_total_employed"),
+                  help="Count · share of employed residents. Creative community: potential "
+                       "teaching artists, collaborators, and peer advocates.")
+        mission_missing = {
+            g: r for g, r in acs_df.attrs.get("acs_missing", {}).items()
+            if g in ("children under 12", "households with children", "adults 65+", "arts workers")
+        }
+        if mission_missing:
+            st.caption("n/a: " + "; ".join(f"**{g}** — {r}" for g, r in mission_missing.items()))
 
     with st.expander("Raw block group data"):
         st.dataframe(acs_df)

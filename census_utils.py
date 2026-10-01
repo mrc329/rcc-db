@@ -13,6 +13,7 @@ https://api.census.gov/data/key_signup.html
 Then set it as CENSUS_API_KEY in Streamlit secrets or as an env var.
 """
 
+import re
 from urllib.parse import urlencode, quote
 
 import requests
@@ -61,45 +62,60 @@ ACS_VARS = {
     "B15003_025E": "edu_doctorate",
 }
 
-# Tables fetched in separate calls, each allowed to fail on its own: not
-# every ACS table is published at block-group level, and one unavailable
-# variable makes the API reject the whole request (HTTP 400). A failed
-# group leaves its columns empty and is listed in df.attrs["acs_missing"].
-ACS_OPTIONAL_GROUPS = {
-    # Commute mode (workers 16+) — public transit share is a rough
-    # proxy for NYC-commuting professional/finance workers in a town
-    # like Westfield on the NJ Transit rail line. This is NOT the same
-    # as actual commute-destination data (that lives in a separate
-    # Census dataset, OnTheMap/LODES, not pulled here).
-    "commute": {
-        "B08301_001E": "commute_total_workers",
-        "B08301_010E": "commute_public_transit",
-    },
-    # Length of residence — proxy for civic tenure/rootedness. Geographic
-    # mobility tables are generally tract-level and up, so expect this
-    # group to come back empty at block-group level.
-    "length of residence": {
-        "B07003_001E": "mobility_total_pop_1yr",
-        "B07003_004E": "mobility_same_house_1yr_ago",
-    },
-    # Occupation (civilian employed 16+). C24010 is the collapsed table
-    # published down to block group; B24010 isn't. _003 is the male
-    # management/business/science/arts count and _039 the female one, so
-    # they're summed below.
-    # Owner-occupied home value (B25075). Lines _025-_027 are $1.0-1.5M,
-    # $1.5-2.0M and $2M+ (ACS's top category, so "$2M+" is a floor).
-    "home values": {
-        "B25075_001E": "owner_homes_total",
-        "B25075_025E": "homes_1m_1_5m",
-        "B25075_026E": "homes_1_5m_2m",
-        "B25075_027E": "homes_2m_plus",
-    },
-    "occupation": {
-        "C24010_001E": "occupation_total_employed",
-        "C24010_003E": "occupation_mgmt_male",
-        "C24010_039E": "occupation_mgmt_female",
-    },
-}
+# Metrics beyond the core request. Each is the sum of the variables in a
+# Census table whose official LABEL matches a pattern, rather than a
+# hard-coded line number: a wrong line number silently returns some other
+# real number, while a label that doesn't match is caught. `expect` is
+# how many variables must match (e.g. male + female lines); any other
+# count means the table isn't laid out as assumed, and the metric's group
+# is reported missing instead of guessed at.
+#
+# Tables load in separate calls so each can fail on its own: not every
+# table is published at block-group level, and one unavailable variable
+# makes the API reject the whole request (HTTP 400). A failed group's
+# columns are left empty and listed in df.attrs["acs_missing"].
+#
+# (column, table, label regex, expect, group)
+_TOTAL = r"^Estimate!!Total:?$"
+ACS_LABEL_METRICS = [
+    # Commute mode — public transit share is a rough proxy for NYC rail
+    # commuters, NOT commute destination (that's OnTheMap/LODES).
+    ("commute_total_workers", "B08301", _TOTAL, 1, "commute"),
+    ("commute_public_transit", "B08301",
+     r"^Estimate!!Total:?!!Public transportation \(excluding taxicab\):?$", 1, "commute"),
+    # Length of residence. Geographic mobility tables are generally
+    # tract-level and up, so expect this group to be missing.
+    ("mobility_total_pop_1yr", "B07003", _TOTAL, 1, "length of residence"),
+    ("mobility_same_house_1yr_ago", "B07003",
+     r"^Estimate!!Total:?!!Same house 1 year ago:?$", 1, "length of residence"),
+    # Occupation (civilian employed 16+). C24010 is the block-group table;
+    # it's split by sex, hence two matching lines.
+    ("occupation_total_employed", "C24010", _TOTAL, 1, "occupation"),
+    ("occupation_mgmt_business_science_arts", "C24010",
+     r"^Estimate!!Total:?!!(Male|Female):?!!Management, business, science, and arts occupations:?$",
+     2, "occupation"),
+    # Mission: creative community — people working in arts/design/media.
+    ("arts_workers", "C24010",
+     r"!!Arts, design, entertainment, sports, and media occupations:?$", 2, "arts workers"),
+    # Owner-occupied home value. $2M+ is ACS's top category.
+    ("owner_homes_total", "B25075", _TOTAL, 1, "home values"),
+    ("homes_1m_plus", "B25075",
+     r"!!\$1,000,000 to \$1,499,999$|!!\$1,500,000 to \$1,999,999$|!!\$2,000,000 or more$",
+     3, "home values"),
+    # Mission: hands-on learning.
+    ("households_with_kids", "B11005",
+     r"^Estimate!!Total:?!!Households with one or more people under 18 years:?$",
+     1, "households with children"),
+    # Children under 12 today are ~3-15 when the Rialto opens in 2029.
+    ("kids_under_12", "B09001",
+     r"!!(Under 3 years|3 and 4 years|5 years|6 to 8 years|9 to 11 years)$",
+     5, "children under 12"),
+    # Mission: live performance — older adults are the core subscriber
+    # audience. Male + female lines for each of six age bands.
+    ("adults_65_plus", "B01001",
+     r"!!(65 and 66 years|67 to 69 years|70 to 74 years|75 to 79 years|80 to 84 years|85 years and over)$",
+     12, "adults 65+"),
+]
 
 # Household income distribution (B19001) bucket labels
 HOUSEHOLDS_TOTAL_VAR = "B19001_001E"
@@ -183,6 +199,69 @@ def _to_numeric_acs(df, cols):
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def fetch_table_labels(year, table):
+    """{variable: label} for a table's estimate variables, from the API's metadata."""
+    resp = requests.get(
+        _census_url(f"{year}/acs/acs5/groups/{table}.json", {}), timeout=30
+    )
+    if not resp.ok:
+        raise RuntimeError(f"labels for {table}: {_census_error(resp)}")
+    variables = resp.json().get("variables", {})
+    return {
+        code: meta.get("label", "")
+        for code, meta in variables.items()
+        if code.endswith("E") and meta.get("label", "").startswith("Estimate!!")
+    }
+
+
+def resolve_label_metric(labels, pattern, expect):
+    """Variables whose label matches `pattern`; raises unless exactly `expect` match."""
+    regex = re.compile(pattern)
+    codes = sorted(code for code, label in labels.items() if regex.search(label))
+    if len(codes) != expect:
+        raise RuntimeError(
+            f"expected {expect} variable(s) matching {pattern!r}, found {len(codes)}"
+        )
+    return codes
+
+
+def _add_label_metrics(df, year, geo, geo_cols):
+    """
+    Add every ACS_LABEL_METRICS column to df. Returns (df, missing) where
+    missing is {group: reason} for groups that couldn't be loaded.
+    """
+    by_group = {}
+    for column, table, pattern, expect, group in ACS_LABEL_METRICS:
+        by_group.setdefault(group, []).append((column, table, pattern, expect))
+
+    missing = {}
+    for group, specs in by_group.items():
+        try:
+            resolved = {}
+            for column, table, pattern, expect in specs:
+                labels = fetch_table_labels(year, table)
+                resolved[column] = resolve_label_metric(labels, pattern, expect)
+            codes = sorted({c for cs in resolved.values() for c in cs})
+            resp = requests.get(
+                _census_url(f"{year}/acs/acs5", {"get": ",".join(codes), **geo}), timeout=30
+            )
+            if not resp.ok:
+                raise RuntimeError(_census_error(resp))
+            data = resp.json()
+            gdf = pd.DataFrame(data[1:], columns=data[0])
+            _to_numeric_acs(gdf, codes)
+            for column, cs in resolved.items():
+                # min_count: a row where every input is missing stays missing
+                gdf[column] = gdf[cs].sum(axis=1, min_count=len(cs))
+            df = df.merge(gdf[geo_cols + list(resolved)], on=geo_cols, how="left")
+        except Exception as e:
+            missing[group] = _redact(e)
+            for column, *_ in specs:
+                df[column] = float("nan")
+    return df, missing
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def fetch_block_group_acs():
     """
     Pull ACS 5-year estimates for every block group in Union County,
@@ -220,35 +299,22 @@ def fetch_block_group_acs():
     df = pd.DataFrame(data[1:], columns=data[0])
     _to_numeric_acs(df, core_vars)
 
-    missing = {}
-    for group, variables in ACS_OPTIONAL_GROUPS.items():
-        try:
-            resp = requests.get(
-                _census_url(f"{year}/acs/acs5", {"get": ",".join(variables), **geo}), timeout=30
-            )
-            if not resp.ok:
-                raise RuntimeError(_census_error(resp))
-            gdata = resp.json()
-            gdf = pd.DataFrame(gdata[1:], columns=gdata[0])
-            _to_numeric_acs(gdf, list(variables))
-            df = df.merge(gdf, on=geo_cols, how="left")
-        except Exception as e:
-            missing[group] = _redact(e)
-            for var in variables:
-                df[var] = pd.NA
-
     df = df.rename(columns={HOUSEHOLDS_TOTAL_VAR: "households_total", **ACS_VARS})
-    for variables in ACS_OPTIONAL_GROUPS.values():
-        df = df.rename(columns=variables)
     df = df.rename(columns=INCOME_BUCKETS)
 
-    df["occupation_mgmt_business_science_arts"] = (
-        df["occupation_mgmt_male"] + df["occupation_mgmt_female"]
-    )
+    df, missing = _add_label_metrics(df, year, geo, geo_cols)
 
-    df["homes_1m_plus"] = df["homes_1m_1_5m"] + df["homes_1_5m_2m"] + df["homes_2m_plus"]
     df["pct_homes_1m_plus"] = (df["homes_1m_plus"] / df["owner_homes_total"] * 100).where(
         df["owner_homes_total"] > 0
+    )
+    df["pct_hh_with_kids"] = (df["households_with_kids"] / df["households_total"] * 100).where(
+        df["households_total"] > 0
+    )
+    df["pct_adults_65_plus"] = (df["adults_65_plus"] / df["total_population"] * 100).where(
+        df["total_population"] > 0
+    )
+    df["pct_arts_workers"] = (df["arts_workers"] / df["occupation_total_employed"] * 100).where(
+        df["occupation_total_employed"] > 0
     )
 
     # High-capacity household counts — for major-gift prospecting these

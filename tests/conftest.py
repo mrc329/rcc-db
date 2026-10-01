@@ -29,7 +29,7 @@ def fake_census(monkeypatch):
     monkeypatch.setattr(census_utils.requests, "get", fakes.fake_census_get)
     monkeypatch.setattr(geometry_utils, "places", fakes.fake_pygris_places)
     monkeypatch.setattr(geometry_utils, "block_groups", fakes.fake_pygris_block_groups)
-    for fn in (census_utils.fetch_block_group_acs,
+    for fn in (census_utils.fetch_block_group_acs, census_utils.fetch_table_labels,
                census_utils.fetch_naics_establishment_counts,
                census_utils.fetch_naics_employment_size_class,
                geometry_utils.get_westfield_boundary,

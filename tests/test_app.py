@@ -39,6 +39,10 @@ def test_app_without_places_key(fake_census, monkeypatch):
     assert by_label["Same Residence vs. 1 Yr Ago"] == "n/a"
     assert by_label["Mgmt/Business/Science/Arts Occupations"] != "n/a"
     assert any("length of residence" in c.value for c in at.caption)
+    # Mission-fit metrics (fake lines are 10+i over 4 block groups: sum 46)
+    assert by_label["Children under 12"] == f"{5 * 46:,}"
+    assert by_label["Adults 65+"].startswith(f"{12 * 46:,} · ")
+    assert by_label["Arts, design & media workers"].startswith(f"{2 * 46:,} · ")
 
 
 def test_app_full_flow(fake_census, fake_places):

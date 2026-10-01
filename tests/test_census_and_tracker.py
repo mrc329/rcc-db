@@ -132,10 +132,47 @@ def test_tables_missing_at_block_group_dont_break_the_load(fake_census):
     assert set(missing) == {"length of residence"}
     assert "unknown variable" in missing["length of residence"]
     assert df["mobility_same_house_1yr_ago"].isna().all()
-    # Occupation now comes from C24010 and sums male + female
-    assert (df["occupation_mgmt_business_science_arts"]
-            == df["occupation_mgmt_male"] + df["occupation_mgmt_female"]).all()
     assert df["commute_public_transit"].notna().all()
+
+
+def test_label_matched_metrics_pick_the_right_lines(fake_census):
+    # Fakes give every matched line 10+i and every table total 1000+100i,
+    # so each metric's value reveals how many lines were summed.
+    cu.fetch_block_group_acs.clear()
+    df = cu.fetch_block_group_acs()
+    line = df.index.map(lambda i: 10 + i).to_series(index=df.index)
+    assert (df["occupation_mgmt_business_science_arts"] == 2 * line).all()  # male + female
+    assert (df["arts_workers"] == 2 * line).all()
+    assert (df["homes_1m_plus"] == 3 * line).all()           # not the $750k-999k decoy
+    assert (df["households_with_kids"] == line).all()        # not the family-households sub-line
+    assert (df["kids_under_12"] == 5 * line).all()           # not 12-14 or 15-17
+    assert (df["adults_65_plus"] == 12 * line).all()         # not 62-64
+    assert (df["commute_public_transit"] == line).all()      # not the Bus sub-line
+    assert (df["owner_homes_total"] == 1000 + 100 * df.index).all()
+    assert df["pct_homes_1m_plus"].between(0, 100).all()
+
+
+def test_unexpected_table_layout_reports_missing_not_wrong(fake_census, monkeypatch):
+    import fakes
+    labels = dict(fakes.ACS_TABLE_LABELS["B25075"])
+    del labels["B25075_027E"]  # e.g. a vintage without the $2M+ line
+    monkeypatch.setitem(fakes.ACS_TABLE_LABELS, "B25075", labels)
+    cu.fetch_block_group_acs.clear()
+    cu.fetch_table_labels.clear()
+    df = cu.fetch_block_group_acs()
+    assert "home values" in df.attrs["acs_missing"]
+    assert "expected 3" in df.attrs["acs_missing"]["home values"]
+    assert df["homes_1m_plus"].isna().all()
+    assert df["arts_workers"].notna().all()  # other groups unaffected
+    cu.fetch_block_group_acs.clear()
+    cu.fetch_table_labels.clear()
+
+
+def test_resolve_label_metric():
+    labels = {"X_001E": "Estimate!!Total:", "X_002E": "Estimate!!Total:!!A", "X_003E": "Estimate!!Total:!!AB"}
+    assert cu.resolve_label_metric(labels, r"!!A$", 1) == ["X_002E"]
+    with pytest.raises(RuntimeError, match="expected 2"):
+        cu.resolve_label_metric(labels, r"!!A$", 2)
 
 
 def test_api_key_never_appears_in_errors(fake_census, monkeypatch):

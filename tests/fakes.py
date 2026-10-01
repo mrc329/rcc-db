@@ -40,6 +40,67 @@ BLOCK_GROUPS = [  # (tract, block group) — fake but well-formed
 ]
 
 
+# Label metadata for the label-matched tables, in the API's format. Each
+# includes look-alike lines the patterns must NOT pick up.
+_T = "Estimate!!Total:"
+ACS_TABLE_LABELS = {
+    "B08301": {
+        "B08301_001E": _T,
+        "B08301_010E": _T + "!!Public transportation (excluding taxicab):",
+        "B08301_011E": _T + "!!Public transportation (excluding taxicab):!!Bus",
+    },
+    "B07003": {
+        "B07003_001E": _T,
+        "B07003_004E": _T + "!!Same house 1 year ago",
+        "B07003_005E": _T + "!!Male:!!Same house 1 year ago",
+    },
+    "C24010": {
+        "C24010_001E": _T,
+        "C24010_002E": _T + "!!Male:",
+        "C24010_003E": _T + "!!Male:!!Management, business, science, and arts occupations:",
+        "C24010_016E": _T + "!!Male:!!Management, business, science, and arts occupations:"
+                            "!!Education, legal, community service, arts, and media occupations:"
+                            "!!Arts, design, entertainment, sports, and media occupations",
+        "C24010_038E": _T + "!!Female:",
+        "C24010_039E": _T + "!!Female:!!Management, business, science, and arts occupations:",
+        "C24010_052E": _T + "!!Female:!!Management, business, science, and arts occupations:"
+                            "!!Education, legal, community service, arts, and media occupations:"
+                            "!!Arts, design, entertainment, sports, and media occupations",
+    },
+    "B25075": {
+        "B25075_001E": _T,
+        "B25075_024E": _T + "!!$750,000 to $999,999",
+        "B25075_025E": _T + "!!$1,000,000 to $1,499,999",
+        "B25075_026E": _T + "!!$1,500,000 to $1,999,999",
+        "B25075_027E": _T + "!!$2,000,000 or more",
+    },
+    "B11005": {
+        "B11005_001E": _T,
+        "B11005_002E": _T + "!!Households with one or more people under 18 years:",
+        "B11005_003E": _T + "!!Households with one or more people under 18 years:!!Family households:",
+    },
+    "B09001": {
+        "B09001_001E": _T,
+        "B09001_002E": _T + "!!In households:",
+        "B09001_003E": _T + "!!In households:!!Under 3 years",
+        "B09001_004E": _T + "!!In households:!!3 and 4 years",
+        "B09001_005E": _T + "!!In households:!!5 years",
+        "B09001_006E": _T + "!!In households:!!6 to 8 years",
+        "B09001_007E": _T + "!!In households:!!9 to 11 years",
+        "B09001_008E": _T + "!!In households:!!12 to 14 years",
+        "B09001_009E": _T + "!!In households:!!15 to 17 years",
+    },
+    "B01001": {
+        "B01001_001E": _T,
+        **{f"B01001_{n:03d}E": _T + f"!!{sex}:!!{band}"
+           for sex, start in (("Male", 19), ("Female", 43))
+           for n, band in zip(range(start, start + 7), [
+               "62 to 64 years", "65 and 66 years", "67 to 69 years", "70 to 74 years",
+               "75 to 79 years", "80 to 84 years", "85 years and over"])},
+    },
+}
+
+
 def fake_census_get(url, timeout=None, **kwargs):
     parsed = urlparse(url)
     qs = parse_qs(parsed.query)
@@ -48,6 +109,15 @@ def fake_census_get(url, timeout=None, **kwargs):
     if "/acs/acs5" in path:
         if "/2024/" in path:  # simulate the newest vintage not being live yet
             return FakeResponse(404, text="unknown dataset")
+        if "/groups/" in path:
+            table = path.rsplit("/", 1)[-1].removesuffix(".json")
+            labels = ACS_TABLE_LABELS.get(table)
+            if labels is None:
+                return FakeResponse(404, text="unknown group")
+            variables = {code: {"label": label} for code, label in labels.items()}
+            variables[f"{table}_001EA"] = {"label": "Annotation of Estimate!!Total:"}
+            variables[f"{table}_001M"] = {"label": "Margin of Error!!Total:"}
+            return FakeResponse(200, {"variables": variables})
         get_vars = qs["get"][0].split(",")
         # Mimic the real API: tables not published at block-group level
         # make it reject the whole request.
@@ -67,6 +137,10 @@ def fake_census_get(url, timeout=None, **kwargs):
                     vals.append("2.9")
                 elif v == "B01002_001E":
                     vals.append("41.2")
+                elif v.endswith("_001E") and v[:6] in ACS_TABLE_LABELS:
+                    vals.append(str(1000 + i * 100))  # table totals
+                elif v in ACS_TABLE_LABELS.get(v[:6], {}):
+                    vals.append(str(10 + i))  # each matched line
                 else:
                     vals.append(str(100 + i * 10))
             rows.append(vals + ["34", "039", tract, bg])
