@@ -86,6 +86,14 @@ ACS_OPTIONAL_GROUPS = {
     # published down to block group; B24010 isn't. _003 is the male
     # management/business/science/arts count and _039 the female one, so
     # they're summed below.
+    # Owner-occupied home value (B25075). Lines _025-_027 are $1.0-1.5M,
+    # $1.5-2.0M and $2M+ (ACS's top category, so "$2M+" is a floor).
+    "home values": {
+        "B25075_001E": "owner_homes_total",
+        "B25075_025E": "homes_1m_1_5m",
+        "B25075_026E": "homes_1_5m_2m",
+        "B25075_027E": "homes_2m_plus",
+    },
     "occupation": {
         "C24010_001E": "occupation_total_employed",
         "C24010_003E": "occupation_mgmt_male",
@@ -236,6 +244,11 @@ def fetch_block_group_acs():
 
     df["occupation_mgmt_business_science_arts"] = (
         df["occupation_mgmt_male"] + df["occupation_mgmt_female"]
+    )
+
+    df["homes_1m_plus"] = df["homes_1m_1_5m"] + df["homes_1_5m_2m"] + df["homes_2m_plus"]
+    df["pct_homes_1m_plus"] = (df["homes_1m_plus"] / df["owner_homes_total"] * 100).where(
+        df["owner_homes_total"] > 0
     )
 
     # High-capacity household counts — for major-gift prospecting these

@@ -8,7 +8,14 @@ prospect research:
   against TIGER boundaries. Defaults to the count of households earning
   $200k+ (ACS top-codes median income at $250k, so a median map flattens
   out in Westfield). The town-wide median is interpolated from combined
-  income brackets rather than averaged across block-group medians.
+  income brackets rather than averaged across block-group medians. Also
+  maps owner-occupied homes worth $1M+, and ranks block groups for
+  canvassing/mailing (with the share of each inside the town line).
+- **Charitable Giving by ZIP** — IRS Statistics of Income ZIP data:
+  share of returns claiming charitable deductions, average deduction, and
+  charity as a share of income, Westfield vs. neighboring ZIPs. Itemizers
+  only, so it's a floor on giving, and it lags 2-3 years. Downloaded from
+  irs.gov on first use (button), then cached on disk.
 - **Small Business Targeting** — Census County Business Patterns sector
   counts, plus a named business list from the Google Places API, mapped
   to NAICS sectors and labeled *known chain* / *likely chain — multiple
