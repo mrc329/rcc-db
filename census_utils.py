@@ -59,19 +59,38 @@ ACS_VARS = {
     "B15003_023E": "edu_masters",
     "B15003_024E": "edu_professional",
     "B15003_025E": "edu_doctorate",
+}
+
+# Tables fetched in separate calls, each allowed to fail on its own: not
+# every ACS table is published at block-group level, and one unavailable
+# variable makes the API reject the whole request (HTTP 400). A failed
+# group leaves its columns empty and is listed in df.attrs["acs_missing"].
+ACS_OPTIONAL_GROUPS = {
     # Commute mode (workers 16+) — public transit share is a rough
     # proxy for NYC-commuting professional/finance workers in a town
     # like Westfield on the NJ Transit rail line. This is NOT the same
     # as actual commute-destination data (that lives in a separate
     # Census dataset, OnTheMap/LODES, not pulled here).
-    "B08301_001E": "commute_total_workers",
-    "B08301_010E": "commute_public_transit",
-    # Length of residence — proxy for civic tenure/rootedness
-    "B07003_001E": "mobility_total_pop_1yr",
-    "B07003_004E": "mobility_same_house_1yr_ago",
-    # Occupation category (civilian employed population 16+)
-    "B24010_001E": "occupation_total_employed",
-    "B24010_003E": "occupation_mgmt_business_science_arts",
+    "commute": {
+        "B08301_001E": "commute_total_workers",
+        "B08301_010E": "commute_public_transit",
+    },
+    # Length of residence — proxy for civic tenure/rootedness. Geographic
+    # mobility tables are generally tract-level and up, so expect this
+    # group to come back empty at block-group level.
+    "length of residence": {
+        "B07003_001E": "mobility_total_pop_1yr",
+        "B07003_004E": "mobility_same_house_1yr_ago",
+    },
+    # Occupation (civilian employed 16+). C24010 is the collapsed table
+    # published down to block group; B24010 isn't. _003 is the male
+    # management/business/science/arts count and _039 the female one, so
+    # they're summed below.
+    "occupation": {
+        "C24010_001E": "occupation_total_employed",
+        "C24010_003E": "occupation_mgmt_male",
+        "C24010_039E": "occupation_mgmt_female",
+    },
 }
 
 # Household income distribution (B19001) bucket labels
@@ -133,6 +152,29 @@ def _census_url(path, params):
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def _redact(message):
+    """Strip the API key from an error message before it reaches the page."""
+    key = _get_api_key()
+    return str(message).replace(key, "***") if key else str(message)
+
+
+def _census_error(resp):
+    # The response body says what's wrong ("error: unknown variable ...");
+    # deliberately no URL, which would carry the API key.
+    body = " ".join(resp.text.split())[:200]
+    return _redact(f"HTTP {resp.status_code}: {body}")
+
+
+def _to_numeric_acs(df, cols):
+    for col in cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        # ACS annotation codes (-666666666 "not computable", -999999999,
+        # -888888888, -222222222 ...) are large negatives; they'd wreck
+        # any sum or average, so treat them as missing.
+        df.loc[df[col] < -100_000_000, col] = pd.NA
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def fetch_block_group_acs():
     """
     Pull ACS 5-year estimates for every block group in Union County,
@@ -141,38 +183,60 @@ def fetch_block_group_acs():
     geometry.py.
 
     Returns a DataFrame keyed by GEOID (state+county+tract+block group),
-    with the ACS vintage used in df.attrs["acs_year"].
+    with the ACS vintage used in df.attrs["acs_year"] and any optional
+    table groups that couldn't be loaded in df.attrs["acs_missing"]
+    ({group: reason}).
     """
-    varlist = ",".join(["NAME", HOUSEHOLDS_TOTAL_VAR] + list(ACS_VARS.keys()) + list(INCOME_BUCKETS.keys()))
-    params = {
-        "get": varlist,
-        "for": "block group:*",
-        "in": f"state:{STATE_FIPS} county:{COUNTY_FIPS} tract:*",
-    }
+    geo = {"for": "block group:*", "in": f"state:{STATE_FIPS} county:{COUNTY_FIPS} tract:*"}
+    geo_cols = ["state", "county", "tract", "block group"]
+    core_vars = [HOUSEHOLDS_TOTAL_VAR] + list(ACS_VARS.keys()) + list(INCOME_BUCKETS.keys())
+
     errors = []
     for year in ACS_YEARS:
-        resp = requests.get(_census_url(f"{year}/acs/acs5", params), timeout=30)
+        try:
+            resp = requests.get(
+                _census_url(f"{year}/acs/acs5", {"get": ",".join(["NAME"] + core_vars), **geo}),
+                timeout=30,
+            )
+        except requests.RequestException as e:
+            raise RuntimeError(_redact(f"Census API request failed: {e}")) from None
         if resp.status_code == 404:  # vintage not published (yet)
             errors.append(f"{year}: HTTP 404")
             continue
-        resp.raise_for_status()
+        if not resp.ok:
+            raise RuntimeError(f"Census API rejected the ACS {year} request — {_census_error(resp)}")
         data = resp.json()
         break
     else:
         raise RuntimeError("No ACS 5-year vintage available: " + "; ".join(errors))
     df = pd.DataFrame(data[1:], columns=data[0])
-    df.attrs["acs_year"] = year
+    _to_numeric_acs(df, core_vars)
 
-    numeric_cols = [HOUSEHOLDS_TOTAL_VAR] + list(ACS_VARS.keys()) + list(INCOME_BUCKETS.keys())
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-        # ACS annotation codes (-666666666 "not computable", -999999999,
-        # -888888888, -222222222 ...) are large negatives; they'd wreck
-        # any sum or average, so treat them as missing.
-        df.loc[df[col] < -100_000_000, col] = pd.NA
+    missing = {}
+    for group, variables in ACS_OPTIONAL_GROUPS.items():
+        try:
+            resp = requests.get(
+                _census_url(f"{year}/acs/acs5", {"get": ",".join(variables), **geo}), timeout=30
+            )
+            if not resp.ok:
+                raise RuntimeError(_census_error(resp))
+            gdata = resp.json()
+            gdf = pd.DataFrame(gdata[1:], columns=gdata[0])
+            _to_numeric_acs(gdf, list(variables))
+            df = df.merge(gdf, on=geo_cols, how="left")
+        except Exception as e:
+            missing[group] = _redact(e)
+            for var in variables:
+                df[var] = pd.NA
 
     df = df.rename(columns={HOUSEHOLDS_TOTAL_VAR: "households_total", **ACS_VARS})
+    for variables in ACS_OPTIONAL_GROUPS.values():
+        df = df.rename(columns=variables)
     df = df.rename(columns=INCOME_BUCKETS)
+
+    df["occupation_mgmt_business_science_arts"] = (
+        df["occupation_mgmt_male"] + df["occupation_mgmt_female"]
+    )
 
     # High-capacity household counts — for major-gift prospecting these
     # say more than a median, which is top-coded at $250k anyway.
@@ -185,6 +249,8 @@ def fetch_block_group_acs():
     df["GEOID"] = (
         df["state"] + df["county"] + df["tract"] + df["block group"]
     )
+    df.attrs["acs_year"] = year
+    df.attrs["acs_missing"] = missing
     return df
 
 
@@ -231,12 +297,12 @@ def _cbp_query(get_vars, geo_params, naics_code):
             try:
                 resp = requests.get(_census_url(f"{year}/cbp", params), timeout=20)
             except requests.RequestException as e:
-                errors.append(f"{year}/{naics_var}: {e}")
+                errors.append(_redact(f"{year}/{naics_var}: {e}"))
                 continue
             if resp.status_code == 204:
                 return year, []
             if not resp.ok:
-                errors.append(f"{year}/{naics_var}: HTTP {resp.status_code}")
+                errors.append(f"{year}/{naics_var}: {_census_error(resp)}")
                 continue
             data = resp.json()
             return year, [dict(zip(data[0], row)) for row in data[1:]]

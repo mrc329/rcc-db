@@ -123,3 +123,41 @@ def test_get_store_without_sheet_is_session(monkeypatch):
     monkeypatch.delenv("TRACKER_SHEET_URL", raising=False)
     store, err = tu.get_store()
     assert isinstance(store, tu.SessionStore) and err is None
+
+
+def test_tables_missing_at_block_group_dont_break_the_load(fake_census):
+    cu.fetch_block_group_acs.clear()
+    df = cu.fetch_block_group_acs()
+    missing = df.attrs["acs_missing"]
+    assert set(missing) == {"length of residence"}
+    assert "unknown variable" in missing["length of residence"]
+    assert df["mobility_same_house_1yr_ago"].isna().all()
+    # Occupation now comes from C24010 and sums male + female
+    assert (df["occupation_mgmt_business_science_arts"]
+            == df["occupation_mgmt_male"] + df["occupation_mgmt_female"]).all()
+    assert df["commute_public_transit"].notna().all()
+
+
+def test_api_key_never_appears_in_errors(fake_census, monkeypatch):
+    import fakes
+    monkeypatch.setenv("CENSUS_API_KEY", "SECRETKEY123")
+    monkeypatch.setattr(cu.requests, "get",
+                        lambda url, **kw: fakes.FakeResponse(400, text="error: bad request"))
+    cu.fetch_block_group_acs.clear()
+    with pytest.raises(RuntimeError) as exc:
+        cu.fetch_block_group_acs()
+    assert "SECRETKEY123" not in str(exc.value)
+    assert "error: bad request" in str(exc.value)
+
+    def boom(url, **kw):
+        raise cu.requests.ConnectionError(f"Max retries exceeded with url: {url}")
+    monkeypatch.setattr(cu.requests, "get", boom)
+    cu.fetch_block_group_acs.clear()
+    with pytest.raises(RuntimeError) as exc:
+        cu.fetch_block_group_acs()
+    assert "SECRETKEY123" not in str(exc.value)
+    cu.fetch_naics_establishment_counts.clear()
+    counts = cu.fetch_naics_establishment_counts()
+    assert not counts["error"].str.contains("SECRETKEY123").any()
+    cu.fetch_block_group_acs.clear()
+    cu.fetch_naics_establishment_counts.clear()

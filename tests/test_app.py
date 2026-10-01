@@ -34,6 +34,11 @@ def test_app_without_places_key(fake_census, monkeypatch):
     assert "Median HH Income (est.)" in labels
     assert "Households earning $200k+" in labels
     assert "Bachelor's+ (25+)" in labels
+    # Mobility isn't published at block-group level -> shown as n/a, explained
+    by_label = {m.label: m.value for m in at.metric}
+    assert by_label["Same Residence vs. 1 Yr Ago"] == "n/a"
+    assert by_label["Mgmt/Business/Science/Arts Occupations"] != "n/a"
+    assert any("length of residence" in c.value for c in at.caption)
 
 
 def test_app_full_flow(fake_census, fake_places):

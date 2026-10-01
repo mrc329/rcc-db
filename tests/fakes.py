@@ -49,6 +49,11 @@ def fake_census_get(url, timeout=None, **kwargs):
         if "/2024/" in path:  # simulate the newest vintage not being live yet
             return FakeResponse(404, text="unknown dataset")
         get_vars = qs["get"][0].split(",")
+        # Mimic the real API: tables not published at block-group level
+        # make it reject the whole request.
+        not_at_bg = [v for v in get_vars if v.startswith(("B07003", "B24010"))]
+        if not_at_bg and qs["for"][0].startswith("block group"):
+            return FakeResponse(400, text=f"error: unknown variable '{not_at_bg[0]}'")
         header = get_vars + ["state", "county", "tract", "block group"]
         rows = [header]
         for i, (tract, bg) in enumerate(BLOCK_GROUPS):

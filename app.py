@@ -169,22 +169,39 @@ with tab_demo:
 
     if merged is not None:
         st.subheader("Professional / Prospect-Research Indicators")
-        edu_pct = (
-            (merged["edu_bachelors"] + merged["edu_masters"]
-             + merged["edu_professional"] + merged["edu_doctorate"]).sum()
-            / merged["edu_total_pop_25plus"].sum() * 100
-        )
-        transit_pct = merged["commute_public_transit"].sum() / merged["commute_total_workers"].sum() * 100
-        stayed_pct = merged["mobility_same_house_1yr_ago"].sum() / merged["mobility_total_pop_1yr"].sum() * 100
-        mgmt_pct = merged["occupation_mgmt_business_science_arts"].sum() / merged["occupation_total_employed"].sum() * 100
+
+        def pct(numerator, denominator):
+            """Percent from summed counts, or None if the data didn't load."""
+            num, den = merged[numerator].sum(min_count=1), merged[denominator].sum(min_count=1)
+            if pd.isna(num) or pd.isna(den) or den == 0:
+                return None
+            return num / den * 100
+
+        def fmt(value):
+            return "n/a" if value is None else f"{value:.0f}%"
+
+        merged["edu_ba_plus"] = (merged["edu_bachelors"] + merged["edu_masters"]
+                                 + merged["edu_professional"] + merged["edu_doctorate"])
+        edu_pct = pct("edu_ba_plus", "edu_total_pop_25plus")
+        transit_pct = pct("commute_public_transit", "commute_total_workers")
+        stayed_pct = pct("mobility_same_house_1yr_ago", "mobility_total_pop_1yr")
+        mgmt_pct = pct("occupation_mgmt_business_science_arts", "occupation_total_employed")
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Bachelor's+ (25+)", f"{edu_pct:.0f}%")
-        c2.metric("Commute via Public Transit", f"{transit_pct:.0f}%",
+        c1.metric("Bachelor's+ (25+)", fmt(edu_pct))
+        c2.metric("Commute via Public Transit", fmt(transit_pct),
                    help="Rough proxy for NYC rail-commuting professionals, not actual commute destination")
-        c3.metric("Same Residence vs. 1 Yr Ago", f"{stayed_pct:.0f}%",
+        c3.metric("Same Residence vs. 1 Yr Ago", fmt(stayed_pct),
                    help="Proxy for civic tenure/rootedness")
-        c4.metric("Mgmt/Business/Science/Arts Occupations", f"{mgmt_pct:.0f}%")
+        c4.metric("Mgmt/Business/Science/Arts Occupations", fmt(mgmt_pct))
+
+        acs_missing = acs_df.attrs.get("acs_missing", {})
+        if acs_missing:
+            st.caption(
+                "n/a = the Census API doesn't publish that table at block-group level "
+                "(or it failed to load): "
+                + "; ".join(f"**{group}** — {reason}" for group, reason in acs_missing.items())
+            )
 
     with st.expander("Raw block group data"):
         st.dataframe(acs_df)
